@@ -1149,6 +1149,36 @@ tensor([[[18., 19., 20.],
 
 
 
-### 2.5 张量的基本运算
+### 2.5 张量的计算
 
-#### 2.5.1
+#### 2.5.1 常用比较
+
+| 函数                                                         | 功能                                                     |
+| ------------------------------------------------------------ | -------------------------------------------------------- |
+| `torch.allclose(input, other, rtol = 1e-05, atol = 1e-08, equal_nan = False)` | 比较两个张量对应位置的元素是否接近，只有全接近才返回True |
+| `torch.equal(input, other)`                                  | 判断两个张量是否具有相同的形状和元素                     |
+| `torch.eq(input, other,...)`                                 | 逐元素比较是否相等                                       |
+| `torch.ge(input, other,...)`                                 | 逐元素比较大于等于                                       |
+| `torch.gt(input, other,...)`                                 | 逐元素比较大于                                           |
+| `torch.le(input, other,...)`                                 | 逐元素比较小于等于                                       |
+| `torch.lt(input, other,...)`                                 | 逐元素比较小于                                           |
+| `torch.ne(input, other,...)`                                 | 逐元素比较不等于                                         |
+| `torch.isnan()`                                              | 判断是否为缺失值                                         |
+
+对于上述的**逐元素比较系列函数**
+
+- 实际上pytorch引入了numpy中的**广播语义**来让不同形甚至元素数量不同的张量也可以进行逐元素操作，广播语义是pytorch中很重要的机制，建议学习，笔记在`extra/broadcast.md`中（如果想先过笔记的话，记住**最好只去比较两个同形张量**）。（[官方文档链接](https://docs.pytorch.org/docs/stable/notes/broadcasting.html)）
+- 它们返回一个和输入张量同形的布尔值张量
+
+而对于`torch.allclose`方法，它的比较规则是
+$$
+\vert input_i-other_i\vert \le atol+rtol \times \vert other_i\vert
+$$
+注意它只返回一个布尔值，**说明两个张量每个对应位置的两个元素都在这种比较规则下是不是都足够接近**
+
+
+
+#### 2.5.2 基本运算
+
+pytorch支持对张量进行**逐元素**运算：加（`+`）、减（`-`）、乘（`*`）、除（`/`）、乘方（`**`）
+
