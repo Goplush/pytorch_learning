@@ -1544,6 +1544,14 @@ $$
 
 卷积核可学习**因为它是“如何提取图像特征”的核心 —— 它不是预先设定好的规则，而是通过数据训练出来的最优“滤波器”。**通过学习得到的滤波器是针对任务最有效的特征提取方式
 
+对于输入通道，由于pytorch支持批处理，因此需要把图像转化为四维形式进行输出：
+
+```
+[batch,channel,height,width]
+```
+
+- `batch`：每批有多少张图片
+
 
 
 #### 3.1.6 分组卷积
@@ -1578,5 +1586,93 @@ torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, dil
 
 `kernel_size`就是**单个卷积核的尺寸**，可以是单个整数`k`，就是`k*k`的卷积核，也可以是一个长度为2的一维元组，代表卷积核的宽度与高度
 
-同理，步长参数`stride`、空洞参数`dilation`、填充参数`padding`同样可以为单个整数或者一维元组。
+同理，步长参数`stride`、空洞参数`dilation`、填充参数`padding`同样可以为单个整数或者一维元组。如果是元组，每个元素分别代表在各个维度的参数值
+
+测试代码如下
+
+```
+import torch
+import torch.nn as nn
+import matplotlib.pyplot as plt
+from PIL import Image
+import numpy as np
+
+#读取图像
+img = Image.open("ch2/assets/lena.png")
+#转化为灰度图
+img = img.convert("L")
+#转化为NP数组
+imgarr = np.array(img,dtype=np.float32)
+
+#先显示图片，显示后会阻塞，关闭后程序继续执行
+plt.figure(figsize=(6,6))
+#将colormap设置至灰度图
+plt.gray()
+plt.imshow(imgarr)
+plt.axis("off")
+plt.show()
+
+#获取图片的尺寸
+imh,imw=imgarr.shape
+#将数组转化为张量
+imgarr_t = torch.from_numpy(imgarr).reshape(1,1,imh,imw)
+#定义边缘卷积核，并将其维度处理为1*1*5*5
+kersize=5
+ker=torch.ones(kersize,kersize,dtype=torch.float32)*-1
+ker[2,2]=24
+ker=ker.reshape(1,1,kersize,kersize)
+#设置卷积对象
+#输出通道设为2是为了留出一个由随机卷积核卷积的输出特征图来进行对比
+conv=torch.nn.Conv2d(in_channels=1,out_channels=2,kernel_size=(kersize,kersize),bias=False)
+#设置卷积时使用的核
+conv.weight.data[0]=ker
+
+#对灰度图进行卷积操作
+img_conv_out=conv(imgarr_t)
+
+#对卷积后特征图进行压缩
+img_conv_out_im=img_conv_out.data.squeeze()
+print("卷积后尺寸: ",img_conv_out_im.shape)
+
+#可视化卷积后图像
+plt.figure(figsize=(6,6))
+plt.subplot(1,2,1)
+plt.gray()
+plt.axis("off")
+plt.imshow(img_conv_out_im[0])
+plt.subplot(1,2,2)
+plt.gray()
+plt.axis("off")
+plt.imshow(img_conv_out_im[1])
+plt.show()
+plt.imsave("ch2/assets/conv.png",img_conv_out_im[0].numpy())
+plt.imsave("ch2/assets/rand_conv.png",img_conv_out_im[1].numpy())
+```
+
+测试代码输出`卷积后尺寸:  torch.Size([2, 508, 508])`并在`ch2/assets`相对路径下保存两张图片`conv.png`与`rand_conv.png`
+
+![image-20250917202845884](assets\conv.png)
+
+![image-20250917202845884](assets\rand_conv.png)
+
+可以看出，边缘卷积核很好的提取了图像的边缘部分，而随机卷积核由于是在一定的`(-k,k)`范围内，本次输出了类似负片的特征图
+
+#### 3.1.9 深度卷积
+
+最后说一下和分组卷积联系紧密的深度卷积，在pytorch官方文档是这么描述它的（翻译后）
+
+>当 `groups == in_channels` 且 `out_channels == K * in_channels`，其中 K 是一个正整数时，该操作也被称为“深度卷积”（depthwise convolution）。
+>
+>换句话说，对于一个尺寸为 `(N, C_in, H_in, W_in)` 的输入（注：原文写的是 L_in，但在图像中通常指 H_in × W_in），可以通过设置参数 `(in_channels=C_in, out_channels=C_in × K, ..., groups=C_in)` 来执行一个“深度乘子为 K”的深度卷积。 
+
+从中可以得到，深度卷积就是**分组卷积的一种极端情况**：
+
+- `groups = in_channels` ： 每个输入通道独立处理
+- `out_channels = K * in_channels` ： 每个输入通道生成 K 个输出通道
+
+也就是说：**每个输入通道，都用 K 个独立的卷积核进行卷积，生成 K 个输出通道。** 
+
+其中，`K`被称为深度卷积的深度乘子
+
+深度卷积是一种高效的卷积方式，**每个卷积核只处理一个输入通道**，常用于轻量级网络（如 MobileNet）
 
