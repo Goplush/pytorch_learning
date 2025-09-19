@@ -124,13 +124,27 @@ $$
 3. **凸性（Convexity）**：若损失函数关于预测值 $ \hat{y} $ 是凸函数，则优化问题更容易（局部最优 = 全局最优）。
 
    - L2、Hinge、Logistic Loss 是凸的；
-- 神经网络中的损失函数因 $ f(x; \theta) $ 非线性，整体非凸。
+
+   - 神经网络中的损失函数因 $ f(x; \theta) $ 非线性，整体非凸。
+
+4. 可解释性：有些损失函数具有良好的可解释性，可以提供有关模型性能的直观理解。例如，对于分类问题，交叉熵损失函数可以解释为最小化模型对真实类别的不确定性。
+
+5. ……
 
 
 
 ### 0.4 梯度下降
 
-在通过损失函数衡量预测决策与真实决策的差异时，通常采用梯度下降的方法进行。具体方法后面详述
+在通过损失函数衡量预测决策与真实决策的差异，来对模型进行自动优化时，**通常采用沿损失函数梯度下降，并反向传播，更新权重的方法进行。**因此激活函数和损失函数是需要对参数求梯度的
+
+> 可以看作是从损失函数开始逐层对可学习参数求偏导，
+
+由于层次化的神经网络可以看作是多层复合函数，求梯度时就会涉及到梯度相乘，加上同一个网络的神经元通常采用一致的激活函数，因此梯度在某些情况下会指数级变化，产生以下两个问题
+
+- 梯度消失（Vanishing Gradient）：在反向传播过程中，**梯度值随着层数加深而指数级衰减**，导致浅层（靠近输入层）参数几乎得不到有效更新，模型训练停滞。
+- 梯度爆炸（Exploding Gradient）：在反向传播过程中，**梯度值随着层数加深而指数级增长**，导致参数更新幅度过大，损失函数震荡甚至发散（NaN）
+
+一般情况下会**通过对权重初始值的设置、网路结构的设置、激活函数的选择等多方面来避免梯度消失和梯度爆炸的问题**
 
 ## 1 安装 pytorch
 
@@ -982,6 +996,34 @@ B.resize_as_(A)将B本身变成2*12：
 
 
 
+此外，pytorch还支持在张量的特定维度前增加列数为1的新维度或者在去除特定的列数为1的维度，从而方便的改变张量的形状：
+
+`torch.unsqueeze(input, dim)`对`input`张量在`dim`维度前添加新的维度
+
+`torch.squeeze(input, dim)`去除`input`张量的`dim`指定的一个或多个列数为1的维度，请尽量保证指定去除的维度列数为1，否则目前属于UB
+
+```python
+def squeeze_tensor():
+    x = torch.zeros(2, 1, 2, 1, 2)
+    print("the shape of x is:",x.size())
+    y=torch.squeeze(x,3)
+    print("after squeeze the 3rd dim, the shape is:",y.size())
+    y=torch.unsqueeze(y,3)
+    print("unsing unsqueeze to put one col back to the 3rd dim, the shapeis:",x.size())
+```
+
+
+
+上述测试方法的输出为：
+
+```
+the shape of x is: torch.Size([2, 1, 2, 1, 2])
+after squeeze the 3rd dim, the shape is: torch.Size([2, 1, 2, 2])
+unsing unsqueeze to put one col back to the 3rd dim, the shapeis: torch.Size([2, 1, 2, 1, 2])
+```
+
+
+
 #### 2.4.4 获得张量的元素
 
 张量和数组一样，支持通过索引`a[x][y]...`的形式访问
@@ -1806,7 +1848,94 @@ plt.imsave("ch2/assets/rand_conv.png",img_conv_out_im[1].numpy())
 
 深度卷积是一种高效的卷积方式，**每个卷积核只处理一个输入通道**，常用于轻量级网络（如 MobileNet）
 
+测试代码如下：
 
+```python
+def rgb_depthwise_edge_conv():
+
+    # 读取图像
+    img = Image.open("ch2/assets/lena.png")
+    # 保持 RGB 彩色图像（不转灰度）
+    img = img.convert("RGB")
+    
+    # 转化为 NumPy 数组 (H, W, C)
+    imgarr = np.array(img, dtype=np.float32)  # shape: (512, 512, 3)
+
+    # 获取图像尺寸
+    imh, imw, c = imgarr.shape  # 应该是 512x512x3
+
+    # 将数组从 (H, W, C) 转为 (C, H, W)，并添加 batch 维度 -> (1, 3, 512, 512)
+    img_t = torch.from_numpy(imgarr.transpose(2, 0, 1)).unsqueeze(0)  # shape: (1, 3, 512, 512)
+
+    # 定义边缘检测卷积核 (5x5)，中心强正，周围负（类似拉普拉斯高斯或锐化核）
+    kersize = 5
+    ker = torch.ones(kersize, kersize, dtype=torch.float32) * -1
+    ker[2, 2] = 24  # 中心权重较大，用于突出边缘
+
+    # 扩展卷积核到三维：输出通道=3, 输入通道=3, 分组=3 → 深度卷积
+    # 我们要构造一个形状为 (3, 1, 5, 5) 的权重，用于分组卷积
+    weight = torch.stack([ker] * 3)  # shape: (3, 5, 5) → 每个通道用相同边缘核
+    weight = weight.unsqueeze(1)     # shape: (3, 1, 5, 5)
+
+    # 设置分组卷积（depthwise convolution），每输入通道单独卷积
+    conv = nn.Conv2d(in_channels=3,
+                     out_channels=3,
+                     kernel_size=kersize,
+                     groups=3,        # 关键：实现逐通道卷积（depthwise）
+                     bias=False,
+                     padding=kersize//2)  # 加 padding 保持尺寸不变
+
+    # 手动设置卷积核权重
+    with torch.no_grad():
+        conv.weight.data.copy_(weight)
+
+    # 执行卷积操作
+    with torch.no_grad():
+        output = conv(img_t)  # shape: (1, 3, 512, 512)
+
+    # 去除 batch 维度，并转为 (3, 512, 512) -> 即 R, G, B 各自的边缘特征图
+    edge_maps = output.squeeze().cpu()  # shape: (3, 512, 512)
+    print("卷积后特征图尺寸:", edge_maps.shape)
+
+    # 可视化：使用 2x2 网格布局展示原图和三个通道的边缘图
+    plt.figure(figsize=(10, 10))
+
+    # 第一行，第一列：原图
+    plt.subplot(2, 2, 1)
+    plt.imshow(imgarr.astype(np.uint8))
+    plt.title("Original Image")
+    plt.axis("off")
+
+    # 第一行，第二列：Red 通道边缘
+    plt.subplot(2, 2, 2)
+    plt.imshow(edge_maps[0], cmap='gray')
+    plt.title("Edge - Red Channel")
+    plt.axis("off")
+
+    # 第二行，第一列：Green 通道边缘
+    plt.subplot(2, 2, 3)
+    plt.imshow(edge_maps[1], cmap='gray')
+    plt.title("Edge - Green Channel")
+    plt.axis("off")
+
+    # 第二行，第二列：Blue 通道边缘
+    plt.subplot(2, 2, 4)
+    plt.imshow(edge_maps[2], cmap='gray')
+    plt.title("Edge - Blue Channel")
+    plt.axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+    # 保存结果
+    plt.imsave("ch2/assets/edge_r.png", edge_maps[0].numpy(), cmap='gray')
+    plt.imsave("ch2/assets/edge_g.png", edge_maps[1].numpy(), cmap='gray')
+    plt.imsave("ch2/assets/edge_b.png", edge_maps[2].numpy(), cmap='gray')
+```
+
+
+
+上述测试代码会显示原图和rgb通道边缘卷积的的结果合并输出展示，并把rgb三个通道每个通道的卷积结果分别保存到`ch2/assets/edge_x.png`中
 
 ### 3.2 池化(Pooling)层
 
@@ -1910,4 +2039,485 @@ $$
 
 最后介绍一下表中提及的`MaxUnpoolxd`系列类型，同样是以二维为例：
 
-``
+`class torch.nn.MaxUnpool2d(kernel_size, stride=None, padding=0)`
+
+该类作为 `MaxPool2d` 的**逆操作（unpooling）**，通过记录最大池化时最大值的位置，将这些值恢复到原来的位置，从而实现某种意义上的上采样。它不会恢复被丢弃的非最大值，只是把最大值放回原来的位置，其余位置通常填充为 0 。
+
+需要注意，在使用该类对象的`unpool(input,indices)`方法进行反卷积时，传入的`indices`参数通常需要是 `MaxPool`产生的索引张量 。
+
+
+
+### 3.3 激活函数
+
+开头的引入部分说激活函数需要避免梯度消失和梯度爆炸的问题，这里会介绍一些具体的激活函数，并说明它们的特点
+
+本部分主要参考了
+
+https://paddlepedia.readthedocs.io/en/latest/tutorials/deep_learning/activation_functions/Activation_Function.html#id2
+
+
+
+#### 3.3.1 sigmoid
+
+函数定义：
+
+$$
+f(x) = \sigma(x) = \frac{1}{1 + e^{-x}}
+$$
+
+导数：
+
+$$
+f'(x) = f(x)(1 - f(x)
+$$
+
+
+![图3 sigmoid](assets\sigmoid.jpg)
+
+优点：
+
+1. sigmoid 函数的输出映射在 (0,1) 之间，单调连续，输出范围有限，优化稳定，可以用作输出层；
+2. 求导容易；
+
+缺点：
+
+1. 由于其软饱和性，**一旦落入饱和区（离原点较远的区域）梯度就会接近于0**，根据反向传播的链式法则，容易产生梯度消失，导致训练出现问题；
+2. Sigmoid函数的输出恒大于0。非零中心化的输出会使得其后一层的神经元的输入发生偏置偏移（Bias Shift），并进一步使得梯度下降的收敛速度变慢；
+   - 关于偏置偏移的内容不难，同样在`ch2/extra/`文件夹中单独给出
+3. 计算时，由于具有幂运算，计算复杂度较高，运算速度较慢。
+
+
+
+#### 3.3.2 tanh
+
+函数定义：
+
+$$
+f(x) = \tanh(x) = \frac{e^x - e^{-x}}{e^x + e^{-x}}
+$$
+
+导数：
+
+$$
+f'(x) = 1 - f(x)^2
+$$
+
+
+![图4 tanh](D:\data\repos\pytorch_learning\ch2\assets\tanh.jpg)
+
+优点：
+
+1. tanh 比 sigmoid 函数收敛速度更快；
+2. 相比 sigmoid 函数，tanh 是以 0 为中心的；
+
+缺点：
+
+1. 与 sigmoid 函数相同，由于饱和性，**在远离原点时容易产生的梯度消失**；
+2. 与 sigmoid 函数相同，由于具有幂运算，计算复杂度较高，运算速度较慢。
+
+
+
+#### 3.3.3 ReLU
+
+**Rectified Linear Unit**
+
+函数定义：
+
+$$
+f(x) = 
+\begin{cases}
+0 & x < 0 \\
+x & x \geq 0
+\end{cases}
+$$
+
+导数：
+
+$$
+f'(x) = 
+\begin{cases}
+0 & x < 0 \\
+1 & x \geq 0
+\end{cases}
+$$
+![图5 ReLU](D:\data\repos\pytorch_learning\ch2\assets\relu.jpg)
+
+优点：
+
+1. 收敛速度快；
+2. 相较于 sigmoid 和 tanh 中涉及了幂运算，导致计算复杂度高， ReLU可以更加简单的实现；
+3. 当输入 x>=0 时，ReLU 的导数为常数，这样可有效缓解梯度消失问题；
+4. 当 x<0 时，ReLU 的梯度总是 0，提供了神经网络的稀疏表达能力；
+
+缺点：
+
+1. ReLU 的输出不是以 0 为中心的；
+2. 神经元坏死现象，某些神经元可能永远不会被激活，导致相应参数永远不会被更新；
+3. 不能避免梯度爆炸问题；
+
+神经元坏死指的是在神经网络训练过程中，有些神经元在整个训练阶段几乎 **不再激活**（输出恒为零或者接近零），它们对模型的输出没有贡献，就像“死掉”了一样。
+
+> 相比于梯度消失，神经元坏死是一个更罕见的问题，因为它不仅需要激活函数在很长的区域内维持在接近零的位置
+
+使用 **ReLU** 激活函数时，如果输入长期落在负区间，输出就是 **0**，梯度也为 **0**，该神经元就不会再更新参数 ，也就成为了 **坏死神经元**。
+
+
+
+#### 3.3.4 LReLU
+
+函数定义：
+
+$$
+f(x) = 
+\begin{cases}
+\alpha x & x < 0 \\
+x & x \geq 0
+\end{cases}
+$$
+
+导数：
+
+$$
+f'(x) = 
+\begin{cases}
+\alpha & x < 0 \\
+1 & x \geq 0
+\end{cases}
+$$
+![图6 LReLU](D:\data\repos\pytorch_learning\ch2\assets\lrelu.jpg)
+
+优点：
+
+1. 避免梯度消失；
+2. 由于导数总是不为零，因此可减少死神经元的出现；
+
+缺点：
+
+1. LReLU 表现并不一定比 ReLU 好；
+2. 无法避免梯度爆炸问题；
+
+
+
+#### 3.3.5 PReLU
+
+函数定义：
+
+$$
+f(\alpha, x) = 
+\begin{cases}
+\alpha & x < 0 \\
+x & x \geq 0
+\end{cases}
+$$
+
+导数：
+
+$$
+f(\alpha, x)' = 
+\begin{cases}
+\alpha & x < 0 \\
+1 & x \geq 0
+\end{cases}
+$$
+其中，$\alpha$也是一个可学习的参数
+
+
+
+![图7 PReLU](D:\data\repos\pytorch_learning\ch2\assets\prelu.jpg)
+
+PReLU 是 LReLU 的改进，可以自适应地从数据中学习参数；
+
+收敛速度快、错误率低；
+
+由于函数本身是可学习的，PReLU 可以用于反向传播的训练，可以与其他层同时优化；
+
+
+
+#### 3.3.6 RReLU
+
+函数定义：
+
+$$
+f(\alpha, x) = 
+\begin{cases}
+\alpha & x < 0 \\
+x & x \geq 0
+\end{cases}
+$$
+
+导数：
+
+$$
+f(\alpha, x)' = 
+\begin{cases}
+\alpha & x < 0 \\
+1 & x \geq 0
+\end{cases}
+$$
+其中 $\alpha$ 是一个服从特定区间的均匀分布的随机变量，pytorch框架允许用户自定义均匀分布的区间上下界
+
+
+
+#### 3.3.7 SELU
+
+(Scaled Exponential Linear Unit)
+
+函数定义：
+
+$$
+f(\alpha, x) = \lambda
+\begin{cases}
+\alpha (e^x - 1) & x < 0 \\
+x & x \geq 0
+\end{cases}
+$$
+
+导数：
+
+$$
+f(\alpha, x)' = \lambda
+\begin{cases}
+\alpha e^x & x < 0 \\
+1 & x \geq 0
+\end{cases}
+$$
+其中 λ 和 α 是固定数值（分别为 1.0507 和 1.6726）
+
+![图10 SELU](D:\data\repos\pytorch_learning\ch2\assets\selu.jpg)
+
+优点：
+
+1. **自归一化效果**：在合适条件下（比如输入数据标准化、使用 LeCun Normal 初始化、全连接深层网络），神经元的输出会自动保持在零均值、单位方差附近，不需要显式归一层。
+2. **缓解梯度消失/爆炸**：因为输出分布会趋向稳定，深层网络在前向和反向传播中不容易梯度消失或爆炸
+3. 保留负值
+
+
+
+缺点：**条件限制强**，SELU 的自归一化效果依赖于：
+
+- 网络是全连接前馈结构（FCN），在 CNN 或 RNN 中效果较差；
+- 权重初始化要用 LeCun Normal；
+- 输入需要标准化。
+   如果这些条件不满足，自归一化优势会大打折扣。
+
+SELU 的最大亮点是：在 **深层前馈全连接网络** 中，可以减少对 BatchNorm 归一层的依赖。但在现代主流架构（CNN、Transformer、RNN）中，由于其假设不成立，使用频率远低于 ReLU/GeLU/Swish。
+
+
+
+#### 3.3.8 softsign
+
+函数定义：
+
+$$
+f(x) = \frac{x}{|x| + 1}
+$$
+
+导数：
+
+$$
+f'(x) = \frac{1}{(1 + |x|)^2}
+$$
+![图11 softsign](D:\data\repos\pytorch_learning\ch2\assets\softsign.jpg)
+
+
+
+优点：
+
+1. **平滑性好**：相比 ReLU、硬饱和函数，Softsign 连续可微，梯度变化平滑，没有突然的拐点。
+2. **输出范围有限**：输出被压缩在 $(-1, 1)$ 区间，类似 $\tanh$，能防止数值发散。
+3. **能缓解梯度消失**：对大输入，Softsign 的渐近速度比 $\tanh$ 更慢（$\tanh(x)\to \pm1$ 指数级，Softsign 是 $1/|x|$ 级），这意味着在大输入下，梯度衰减得没有 $\tanh$ 那么快，缓解部分梯度消失问题。
+4. **计算比 tanh 更便宜**：它只需要加法、除法和绝对值运算，没有指数运算，计算上更轻量。
+
+缺点：相比于ReLU家族，**softsign激活函数的学习效率通常是更低的，或至少不具优势**
+
+
+
+#### 3.3.9 softplus
+
+函数定义：
+
+$$
+f(x) = \ln(1 + e^x)
+$$
+
+导数（导数是Sigmoid函数）：
+
+$$
+f'(x) = \frac{1}{1 + e^{-x}}
+$$
+
+![图12 softplus](D:\data\repos\pytorch_learning\ch2\assets\softplus.jpg)
+
+它可以看作是是 ReLU 的一个光滑版本，没有 ReLU 的“硬拐点”。
+
+- 当 $x \to -\infty$，$\text{Softplus}(x) \to 0$。
+- 当 $x \to +\infty$，$\text{Softplus}(x) \to x$。
+
+优点：
+
+1. **梯度连续，不会突然消失**：它的导数在`(-inf, inf)`上存在且连续，并且始终大于零，不会出现 ReLU 的“死神经元”问题。
+2. **保留非线性和稀疏性**：小于 0 的输入会被压到接近 0（但不是完全 0），这和 ReLU 类似，能保持部分稀疏性。
+
+
+
+缺点：
+
+1. **计算比 ReLU 慢**：需要计算 $\exp$ 和 $\log$，在大规模神经网络里比 ReLU 要贵一些
+2. **梯度消失风险**
+3. **稀疏性不如 ReLU 强**：因为对负输入输出并不是严格的 0，导致特征稀疏性下降。
+   - 特征的稀疏性指的是针对特定的输入，只有部分神经元被激活的特性，稀疏特征让每个样本只激活一部分神经元，等于让不同的神经元“专门负责”不同模式。
+   - 如果所有神经元都输出非零值，特征空间就很“密集”，样本之间容易互相干扰。稀疏化后，不同输入只会激活不同的少数神经元，使得不同类别在特征空间里更容易区分。
+
+Softplus 激活函数的实际应用较少：在现代网络里很少作为默认激活函数使用，大多数情况下 ReLU/GELU/Swish 更常见
+
+
+
+#### 3.3.10 softmax
+
+**Softmax 激活函数** 是深度学习中非常重要的一个函数，尤其在**多分类问题**中被广泛使用。它常用于神经网络的**输出层**，将原始的“logits”（未归一化的分数）转换为一个**概率分布**，使得每个类别的输出值在 [0, 1] 之间，且所有类别的概率之和为 1。
+
+> 在多分类任务中，由于有多种可能的决策，因此网络的输出个数通常与类别集合大小相等
+
+softmax函数值可被解释为模型对每个类别预测的“置信度”或“近似概率”。它反映了在当前模型参数下，样本属于各个类别的相对可能性，但不一定是真实的统计概率。对于输出向量序列$z_1,z_2,...$
+$$
+P(y = i | \mathbf{x}) = \frac{e^{z_i}}{\sum_j e^{z_j}}
+$$
+其中$\mathbf{x}$为输入特征向量
+
+示意图如下
+
+![图13 三类分类问题的softmax输出示意图](D:\data\repos\pytorch_learning\ch2\assets\softmax.png)
+
+
+
+#### 3.3.11 swish
+
+**Swish 激活函数** 是由 Google 的研究团队在 2017 年提出的一种新型激活函数，它通过自动搜索（AutoML）的方式被发现，在多个深度学习任务中表现优于传统的 ReLU 激活函数。
+
+swish 激活函数的形式非常简单
+$$
+Swish(x)=x*\sigma(\beta x)
+$$
+其中，
+
+- $\sigma(\cdot)$为Sigmoid函数
+- $\beta$为可学习参数或超参数，通常固定为1
+
+![图16 swish 超参数](D:\data\repos\pytorch_learning\ch2\assets\swish2.jpg)
+
+在$\beta=1$的情况下，swish 激活函数的一阶导数如下：
+
+$$
+\begin{aligned}
+f'(x) &= \sigma(x) + x \cdot \sigma(x)(1 - \sigma(x)) \\
+&= \sigma(x) + x \cdot \sigma(x) - x \cdot \sigma(x)^2 \\
+&= x \cdot \sigma(x) + \sigma(x)(1 - x \cdot \sigma(x)) \\
+&= f(x) + \sigma(x)(1 - f(x))
+\end{aligned}
+$$
+Swish 的形状类似于 ReLU，但它是**平滑且非单调**的。它在负值区域不会完全“死亡”（不像 ReLU 在 x<0 时输出为 0），而是保留一个很小的负值响应，这有助于缓解梯度消失和神经元“死亡”问题。
+
+主要性质：
+
+1. **平滑连续可导** ：有利于优化；
+2. **非单调性** ： 在某些区域递减，有助于模型表达更复杂的函数；
+3. **有界负值、无界正值** ： 类似于 Mish、GELU；
+4. **自门控机制（Self-gating）** ： Sigmoid 部分可以看作对输入 x 的“门控权重”，实现自适应缩放；
+5. **在深层网络中表现优异** ： 尤其在 ImageNet、ResNet、Transformer 等结构中超越 ReLU。
+
+
+
+#### 3.3.12 h-swish
+
+hard swish
+
+h-swish 使用 **分段线性函数（ReLU6）** 来近似 Sigmoid，完全避免了指数运算，计算更快、更节能
+
+h-swish 在 x ∈ [-3, 3] 区间内是线性的，两端饱和，形状与 Swish 非常相似，但在负值区域更“硬”。
+
+![图17 Hard Swish](D:\data\repos\pytorch_learning\ch2\assets\hard_swish.jpg)
+
+
+
+**性能接近 Swish**：在 MobileNetV3 等轻量模型中，精度损失极小，速度提升明显，但是**仅推荐用于轻量模型**：在服务器级大模型中，Swish 或 GELU 仍是首选。
+
+
+
+#### 3.3.13 激活函数的选择
+
+首先，对分类任务的**输出层：**
+
+- **二分类** → 使用 `sigmoid`（输出概率在 [0,1]）
+- **多分类（互斥）** → 使用 `softmax`（输出为类别概率分布）
+- **多标签分类（可同时属于多个类）** → 使用多个 `sigmoid`（每个输出独立）
+
+> 注意：`softmax` 通常用于最后一层，配合交叉熵损失；而 `sigmoid` 可用于多标签场景。 
+
+
+
+**回归任务**的输出层一般使用：
+
+- `linear`（无激活函数）或
+- `softplus` / `softsign`（若需输出正数或平滑限制）
+
+> 避免使用 `sigmoid` 或 `tanh`，除非你的目标值天然在 [0,1] 或 [-1,1] 区间。 
+
+
+
+**隐藏层**激活函数选择：
+
+| 激活函数                  | 推荐场景                   | 优点                           | 缺点                               |
+| ------------------------- | -------------------------- | ------------------------------ | ---------------------------------- |
+| **ReLU**                  | 大多数情况首选             | 计算快、缓解梯度消失、稀疏激活 | 死区问题（负输入为0）              |
+| **Leaky ReLU**            | 存在负输入且希望避免死区   | 解决 ReLU 的死区问题           | 超参 α 需调参                      |
+| **PReLU / RReLU**         | 数据量大时可用             | 自动学习负斜率，性能略优       | 更复杂，训练成本稍高               |
+| **SELU**                  | 深层网络（如自编码器）     | 自归一化，稳定训练             | 对网络结构要求严格（需特定初始化） |
+| **tanh**                  | 小型网络或旧模型           | 输出对称，适合某些传统架构     | 梯度饱和（易梯度消失）             |
+| **sigmoid**               | 不推荐作隐藏层             | 平滑，但梯度小                 | 极易导致梯度消失                   |
+| **softplus**/**softsign** | 需要平滑输出时             | 数学上连续可导                 | 比 ReLU 慢，效果不显著             |
+| **Swish / h-swish**       | 新型网络（如 MobileNetV3） | 性能好，平滑                   | 计算开销稍大                       |
+
+> 当前主流推荐： 
+>
+> - 隐藏层优先选 ReLU 或其变体（Leaky ReLU / PReLU）
+> - 现代模型中 Swish 和 h-swish 表现优异，尤其在移动端或轻量级模型中
+
+
+
+总结：
+
+1. **优先考虑 ReLU 及其变体（Leaky ReLU / PReLU）**
+   - 是大多数深度学习任务的默认选择。
+   - 特别适用于 CNN、RNN、Transformer 的隐藏层。
+
+2. **避免在隐藏层使用 sigmoid 和 tanh**
+   - 它们容易导致梯度消失，尤其是在很深的网络中。
+   - 除非有特殊需求（如旧模型复现、特定任务）。
+3. **输出层必须匹配任务**
+   - 分类 → softmax / sigmoid
+   - 回归 → linear / softplus / softsign
+
+4. **关注计算效率与硬件兼容性**
+   - 如移动设备部署时，`h-swish` 比 `swish` 更高效（使用分段近似）。
+   - `ReLU` 最快，适合实时推理。
+5. **实验驱动选择**
+   - 在相同架构下，尝试不同激活函数进行 A/B 测试。
+   - 有时 `swish` 或 `PReLU` 会带来小幅提升。
+
+### 3.4 循环层
+
+ 神经网络中的“循环层”通常指的是**循环神经网络（Recurrent Neural Network, RNN）**中的一类结构，常见的包括标准RNN、LSTM（长短期记忆）、GRU（门控循环单元）等。这类层特别适用于处理**序列数据**，比如时间序列、自然语言、语音信号等。
+
+#### 3.4.1 循环层的主要功能
+
+循环层可以处理任意长度的序列输入，（如一句话有不同数量的词），不像CNN那样需要固定维度。
+
+RNN每个时间步依次处理一个元素（如一个单词或一个时间点的数据）。
+
+RNN通过状态传递保持一定程度上的“记忆”：循环层**通过隐藏状态（hidden state）在时间步之间传递信息**，使得模型能“记住”之前的信息。通过这种状态传递能力，**循环层能够建模序列中前后元素之间存在的依赖关系**（如语法结构、趋势变化等）
+
+
+
+#### 3.4.2 循环层的工作原理
+
+由于笔者不是AI学科，加之RNN目前在大规模模型领域已经被

@@ -67,6 +67,14 @@ def tensor_reshape():
     print("\nA.resize_将A本身变成2*12：\n",A)
     print("\nB.resize_as_(A)将B本身变成2*12：\n",B)
 
+def squeeze_tensor():
+    x = torch.zeros(2, 1, 2, 1, 2)
+    print("the shape of x is:",x.size())
+    y=torch.squeeze(x,3)
+    print("after squeeze the 3rd dim, the shape is:",y.size())
+    y=torch.unsqueeze(y,3)
+    print("unsing unsqueeze to put one col back to the 3rd dim, the shapeis:",x.size())
+
 def tensor_slice():
     tensor = torch.tensor([[1, 2, 3],
                        [4, 5, 6],
@@ -136,7 +144,8 @@ if __name__ == '__main__':
     #grad_test()
     #np2tensor2np()
     #tensor_reshape()
+    squeeze_tensor()
     #tensor_slice()
     #tri_torch()
     #joint_tensor()
-    split_tensor()
+    #split_tensor()
