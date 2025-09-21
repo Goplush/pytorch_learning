@@ -2886,7 +2886,7 @@ Input (x_t)       Layer 1 RNN           Layer 2 RNN           Layer 3 RNN
   - `weight_ih_l[k]`: 第 `k` 层从 **输入到隐藏层** 的权重矩阵（input-to-hidden）
   - `weight_hh_l[k]`: 第 `k` 层从 **隐藏状态到隐藏层** 的权重矩阵（hidden-to-hidden）
 - **形状**：
-  - `weight_ih_l[k]`: `(hidden_size, input_size)` 对于第0层；对于深层是 `(hidden_size, num_directions * hidden_size)`
+  - `weight_ih_l[k]`: 对于第0层为`(hidden_size, input_size)` ；对于深层是 `(hidden_size, num_directions * hidden_size)`
   - `weight_hh_l[k]`: `(hidden_size, hidden_size)`
 
  注意：当 `bidirectional=True` 时，每层有两个方向（正向和反向），所以会有： 
@@ -2921,7 +2921,7 @@ Input (x_t)       Layer 1 RNN           Layer 2 RNN           Layer 3 RNN
 
 
 
-此外，`torch.nn` 模块还提供了单层的 RNN 网络，但是用处较少，这里不详细介绍
+此外，`torch.nn` 模块还提供了单层的 RNN 网络，但是用处较少，主要用对单层细节都要高度自定义的网络中，这里不详细介绍
 
 
 
