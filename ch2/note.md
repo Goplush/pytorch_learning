@@ -137,7 +137,7 @@ $$
 
 在通过损失函数衡量预测决策与真实决策的差异，来对模型进行自动优化时，**通常采用沿损失函数梯度下降，并反向传播，更新权重的方法进行。**因此激活函数和损失函数是需要对参数求梯度的
 
-> 可以看作是从损失函数开始逐层对可学习参数求偏导，
+> 可以看作是从损失函数开始逐层对可学习参数求偏导
 
 由于层次化的神经网络可以看作是多层复合函数，求梯度时就会涉及到梯度相乘，加上同一个网络的神经元通常采用一致的激活函数，因此梯度在某些情况下会指数级变化，产生以下两个问题
 
@@ -2921,9 +2921,282 @@ Input (x_t)       Layer 1 RNN           Layer 2 RNN           Layer 3 RNN
 
 
 
-此外，`torch.nn` 模块还提供了单层的 RNN 网络，但是用处较少，主要用对单层细节都要高度自定义的网络中，这里不详细介绍
-
-
 
 #### 3.4.9 LSTM 相关类
 
+`torch.nn`模块也是提供了多层LSTM网络和单层LSTM的实现，这里同样是介绍多层
+
+`class torch.nn.LSTM(input_size, hidden_size, num_layers=1, bias=True, batch_first=False, dropout=0.0, bidirectional=False, proj_size=0, device=None, dtype=None)`
+
+该类构造器大部分参数都和 RNN 类的一致，只说明不一样的
+
+.`proj_size` 参数会为每层添加一个可学习的投影矩阵 $W_{\text{proj}} \in \mathbb{R}^{p \times h}$ ，**附加的投影矩阵只改变 LSTM 的对外输出（即 `output` 和 `h_n`），而不会影响任何内部中间状态的计算过程。** 
+
+实际用途
+
+| 场景               | 作用                                                |
+| ------------------ | --------------------------------------------------- |
+| **减少参数量**     | 后续全连接层输入变小（比如从 512 → 128）            |
+| **降低内存占用**   | `output`序列和`h_n`更小，利于长序列训练             |
+| **控制模型宽度**   | 构建更深但不过宽的网络结构                          |
+| **实现轻量化模型** | 在语音识别、机器翻译中广泛使用（如 Google 的 GNMT） |
+
+> 需要注意的是，即使 `bias = True`，投影矩阵也不会附加可学习的偏置
+
+
+
+此外，该类的各种权重矩阵、偏置变量也是可以直接访问，让用户自定义初始化或者直接读取的：
+
+首先说明一下，pytorch对LSTM的实现和上文说的工作原理是一种数学计算的两种表示方式，在**计算门控权值时将前序隐藏状态和新输入用两个独立的的变换矩阵计算**而不是拼接后用一个矩阵变换，希望读者能建立这两种方法等价性的联系
+
+对于任意时间步 $t$ 和第 $k$ 层 LSTM：
+$$
+i_t = \sigma(W_{ii}x_t + b_{ii} + W_{hi}h_{t-1} + b_{hi}) \quad \text{(输入门)}
+$$
+
+$$
+f_t = \sigma(W_{if}x_t + b_{if} + W_{hf}h_{t-1} + b_{hf}) \quad \text{(遗忘门)}
+$$
+
+$$
+g_t = \tanh(W_{ig}x_t + b_{ig} + W_{hg}h_{t-1} + b_{hg}) \quad \text{(候选状态)}
+$$
+
+$$
+o_t = \sigma(W_{io}x_t + b_{io} + W_{ho}h_{t-1} + b_{ho}) \quad \text{(输出门)}
+$$
+
+$$
+c_t = f_t \odot c_{t-1} + i_t \odot g_t \quad \text{(细胞状态更新)}
+$$
+
+$$
+h_t = o_t \odot \tanh(c_t) \quad \text{(隐藏状态输出)}
+$$
+
+
+
+`torch.nn.LSTM`类型将**和输入相关的变换矩阵打包进了一个变量`weight_ih_l[k]`**，其中 `k` 代表多层 LSTM 的层次，和输入门、遗忘门、候选状态、输出门的输入变换矩阵的数学名称为：$ W_{ii}, W_{if}, W_{ig}, W_{io} $
+$$
+\text{weight\_ih\_l}[k] = [W_{ii} \| W_{if} \| W_{ig} \| W_{io}] \in \mathbb{R}^{4 \times \text{hidden\_size} \times \text{input\_dim}(k)}
+$$
+
+其中，$\text{input\_dim}(k)$ 根据 $k$ 和 $\text{proj\_size}$ 的取值动态确定：
+
+$$
+\text{input\_dim}(k) =
+\begin{cases}
+\text{input\_size}, & \text{若 } k = 0 \\
+\text{num\_directions} \times \text{hidden\_size}, & \text{若 } k > 0 \text{ 且 } \text{proj\_size} = 0 \\
+\text{num\_directions} \times \text{proj\_size}, & \text{若 } k > 0 \text{ 且 } \text{proj\_size} > 0
+\end{cases}
+$$
+
+
+
+同理，和前序隐藏状态相关的变换矩阵被打包进了一个变量 `weight_hh_l[k]`，其中 $k$ 代表多层 LSTM 的层次，对应输入门、遗忘门、候选状态、输出门的隐藏状态变换矩阵的数学名称为：$ W_{hi}, W_{hf}, W_{hg}, W_{ho} $。
+
+$$
+\text{weight\_hh\_l}[k] = [W_{hi} \,||\, W_{hf} \,||\, W_{hg} \,||\, W_{ho}] \in \mathbb{R}^{4 \times \text{hidden\_size} \times \text{hidden\_dim}(k)}
+$$
+
+其中，$\text{hidden\_dim}(k)$ 根据网络的层级结构和是否使用投影（$\text{proj\_size}$）动态确定：
+
+$$
+\text{hidden\_dim}(k) = 
+\begin{cases}
+\text{num\_directions} \times \text{hidden\_size}, & \text{若 } \text{proj\_size} = 0 \\
+\text{num\_directions} \times \text{proj\_size}, & \text{若 } \text{proj\_size} > 0
+\end{cases}
+$$
+
+
+对于输入变换的偏置项 `bias_ih_l[k]` 和前序隐藏状态变换的偏置项 `bias_hh_l[k]` 也是按照相同顺序打包，它们的形状就是$(4*hidden\_size,)$。有些实现（如 CuDNN）会将 `bias_ih` 和 `bias_hh` 合并成一个 `4*hidden_size * 2` 的向量，但在 PyTorch 接口中仍分开存储。
+
+
+
+对于输出投影张量，每层的投影张量都存储在`bias_hh_l[k]`变量中，形状为`(4*hidden_size,)`
+
+
+
+反向相关变量不赘述
+
+
+
+最后说一下LSTM输入输出的和中间变量维度的对比
+
+| 特性                 | RNN      | LSTM                    |
+| -------------------- | -------- | ----------------------- |
+| 输入维度             | 相同     | 相同                    |
+| 输出`output`维度     | 相同     | 相同                    |
+| 隐藏状态`hidden`结构 | 单一张量 | 元组`(h_n, c_n)`        |
+| 是否需要初始化 `h0`  | 可选     | 可选                    |
+| 是否需要初始化`c0`   | 不需要   | 可选（或自动初始化为0） |
+
+
+
+#### 3.4.10 GRU 相关类
+
+同理，先介绍`torch.nn.GRU`类型对工作原理的定义
+$$
+r_t = \sigma(W_{ir}x_t + b_{ir} + W_{hr}h_{(t-1)} + b_{hr})
+$$
+
+$$
+z_t = \sigma(W_{iz}x_t + b_{iz} + W_{hz}h_{(t-1)} + b_{hz})
+$$
+
+$$
+n_t = \tanh(W_{in}x_t + b_{in} + r_t \odot (W_{hn}h_{(t-1)} + b_{hn}))
+$$
+
+$$
+h_t = (1 - z_t) \odot n_t + z_t \odot h_{(t-1)}
+$$
+
+其中：
+
+- $h_t$ 是时间步 $t$ 的隐藏状态
+- $ x_t $ 是时间步 $t$ 的输入
+- $ h_{(t-1)} $ 是该层在时间步 $ t-1 $ 的隐藏状态，或在时间步 0 的初始隐藏状态
+- $ r_t $、$ z_t $、$ n_t $ 分别是重置门、更新门和新候选状态
+- $ \sigma $ 是 sigmoid 函数，$ \odot $ 是 Hadamard 逐元素乘积
+
+在多层 GRU 中，第 $ l $ 层（$ l \geq 2 $）的输入 $ x_t^{(l)} $ 是前一层在时间步 $t$ 的隐藏状态 $ h_t^{(l-1)} $，并乘以 dropout 噪声 $ \delta_t^{(l-1)} $，其中每个 $ \delta_t^{(l-1)} $ 是一个伯努利随机变量，以概率 `dropout` 取值为 0
+
+
+
+然后看构造函数的定义：`class torch.nn.GRU(input_size, hidden_size, num_layers=1, bias=True, batch_first=False, dropout=0.0, bidirectional=False,...)`
+
+这些参数的行为和控制的内容都和之前介绍的基本一致，这里不赘述
+
+
+
+对于输入，这里直接粘贴官方文档:
+
+- `input`：张量，形状为 $(L, H_{in})$（非批量输入），或 $(L, N, H_{in})$（当 `batch_first=False` 时），或 $(N, L, H_{in})$（当 `batch_first=True` 时），包含输入序列的特征。
+  - 输入也可以是打包后的可变长度序列，详情请参见 `torch.nn.utils.rnn.pack_padded_sequence()` 或 `torch.nn.utils.rnn.pack_sequence()`。（下一部分会简要说明）
+-  `h_0`：张量，形状为 $(D \times \text{num\_layers}, H_{out})$ 或 $(D \times \text{num\_layers}, N, H_{out})$，包含输入序列的初始隐藏状态。若未提供，默认为零。
+
+输出也是一样：
+
+- `output`：张量，形状为 $(L, D \times H_{out})$（非批量输入），或 $(L, N, D \times H_{out})$（当 `batch_first=False` 时），或 $(N, L, D \times H_{out})$（当 `batch_first=True` 时），包含 GRU 最后一层在每个时间步 $t$ 的输出特征 $h_t$。如果输入是一个 `torch.nn.utils.rnn.PackedSequence`，则输出也将是一个打包序列。
+
+- `h_n`：张量，形状为 $(D \times \text{num\_layers}, H_{out})$ 或 $(D \times \text{num\_layers}, N, H_{out})$，包含输入序列的最终隐藏状态。
+
+
+
+#### 3.4.11 变长序列处理
+
+在自然语言处理（NLP）中，**句子长度各不相同是常态**。如果你直接把不同长度的句子送入 RNN，会遇到维度不一致的问题。PyTorch 提供了一套完整的机制来高效地训练这种 **变长序列（variable-length sequences）** 数据集。
+
+这里**主要讲原理，具体做法代码不需要掌握**，使用时学习即可
+
+首先， 对于输入的许多序列，需要**分词**，**构建数据集的词表**，并将序列中的**单词映射到词表索引**
+
+然后，pytorch提供了方法，可以**将索引序列用特定 `<PAD>` 值填充至相同长度**
+
+> 在这个过程中**要记录有效序列的长度**，不然对每个序列都要在遍历时判断是否到达末尾不利于并发处理
+
+最后，将索引序列集合**使用  `pack_padded_sequence` 打包**，打包后的对象能让 RNN 识别些是真实数据，哪些是填充的，避免 RNN 把 `<PAD>` 当作有效输入传播隐藏状态。
+
+```python
+#数据集例子
+sentences = [
+    "I love deep learning",
+    "PyTorch is great",
+    "RNNs are powerful for sequences",
+    "Hi"
+]
+labels = [1, 1, 1, 0]  # 假设是情感分类标签
+
+from collections import Counter
+import torch
+from torch.nn.utils.rnn import pad_sequence
+from torch.nn.utils.rnn import pad_sequence
+
+# 简单分词
+tokenized = [sent.lower().split() for sent in sentences]
+# [['i', 'love', 'deep', 'learning'], ['pytorch', 'is', 'great'], ...]
+
+# 构建词汇表
+counter = Counter(word for sent in tokenized for word in sent)
+vocab = {'<PAD>': 0, '<UNK>': 1}
+vocab.update({word: idx + 2 for idx, word in enumerate(counter.keys())})
+
+# 转换为索引序列
+indexed_sentences = [[vocab.get(word, 1) for word in sent] for sent in tokenized]
+# 示例：[[2, 3, 4, 5], [6, 7, 8], [9, 10, 11, 12, 13, 14], [15]]
+
+# 转成 tensor 并按长度排序（可选，提高 pack 效率）
+seq_tensors = [torch.tensor(seq, dtype=torch.long) for seq in indexed_sentences]
+
+# 获取原始长度
+lengths = torch.tensor([len(seq) for seq in seq_tensors])
+
+# 使用 pad_sequence 自动补齐
+padded_seqs = pad_sequence(seq_tensors, batch_first=True, padding_value=0)
+# 输出 shape: (batch_size, max_seq_len)
+
+print(padded_seqs)
+
+# 定义 embedding 层和 RNN
+embed = nn.Embedding(vocab_size, embedding_dim=50)
+rnn = nn.RNN(input_size=50, hidden_size=64, num_layers=1, batch_first=True)
+
+# Embedding
+embedded = embed(padded_seqs)  # (B, L, D)
+
+# 打包：去除 padding 的影响
+packed_embedded = pack_padded_sequence(
+    embedded,
+    lengths,
+    batch_first=True,
+    enforce_sorted=False  # PyTorch 1.11+ 支持非排序输入
+)
+
+# 输入 RNN
+packed_output, hidden = rnn(packed_embedded)
+```
+
+
+
+#### 3.4.12 单层循环神经网络
+
+`torch.nn` 模块还提供了单层的网络，主要用在堆叠方式高度自定义的网络中：
+
+标准多层 RNN 是“一层接一层”的线性堆叠：
+
+```
+Layer1_output(t) → Layer2_input(t)
+```
+
+但用 Cell 可以实现：
+
+- **跳跃连接（Skip connections）**：将第1层的输出直接传给第3层
+- **残差连接（Residual connections）**：`h2 = cell2(x2, h1) + h1`
+- **跨时间+跨层混合连接**
+- 非顺序结构（如树形、图状传播）
+
+
+
+堆叠Cell还能实现**每层的隐状态具有不同维度**：
+
+```
+layer1 = nn.LSTMCell(10, 64)
+layer2 = nn.LSTMCell(64, 32)   # 更小
+layer3 = nn.LSTMCell(32, 128)  # 再变大
+```
+
+
+
+**自定义时间步行为（非均匀/跳跃/重复）**
+
+
+
+**混合不同类型单元**：可以在同一模型中自由组合：
+
+- 第1层用 `LSTMCell`
+- 第2层用 `GRUCell`
+- 第3层用自定义 RNN 单元
+- ……
