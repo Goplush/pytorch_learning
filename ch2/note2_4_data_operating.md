@@ -1,8 +1,12 @@
-# 2.4 数据操作与预处理
+[TOC]
 
-## 2.4.1 数据的加载
 
-### 2.4.1.1 引入
+
+# 4 数据操作与预处理
+
+## 4.1 数据的加载
+
+### 4.1.1 引入
 
 在深度学习中，模型是心脏，而数据是血液。高效、灵活地管理和加载数据是成功训练模型的关键一步。PyTorch 提供了一套强大而优雅的工具来处理数据流程，其核心便是 `torch.utils.data` 模块中的 **Dataset**, **Sampler** 和 **DataLoader** 这三个类。
 
@@ -40,7 +44,7 @@
 
 
 
-### 2.4.1.2 数据集
+### 4.1.2 数据集
 
 `Dataset` 是 PyTorch 数据加载管道（Data Loading Pipeline）的基石，**它是一个抽象概念，定义了组织和访问数据的接口**。因为现实场景下的数据集组织方式是不可预估的，因此 pytorch 框架没有实现统一的数据集访问接口，而是实现了不同种类的基类，让用户通过实现抽象方法，自主适配用到的数据集。
 
@@ -48,7 +52,7 @@
 
 PyTorch 将 `Dataset` 分为两大范式：**映射式数据集**和**可迭代式数据集**，它们的设计哲学和适用场景截然不同。
 
-#### 2.4.1.2.1 映射式数据集
+#### 4.1.2.1 映射式数据集
 
 首先是映射式数据集，这类数据集实现类需要直接继承 `torch.utils.data.Dataset` 类
 
@@ -74,7 +78,7 @@ PyTorch 将 `Dataset` 分为两大范式：**映射式数据集**和**可迭代�
   - **输出**: 一个包含对应样本的列表。
   - **注意**: 如果没有实现 `__getitems__`，`DataLoader` 会自动降级为循环调用 `__getitem__`。
 
-#### 2.4.1.2.2 可迭代对象与迭代器
+#### 4.1.2.2 可迭代对象与迭代器
 
 在进入迭代式数据集的介绍之前，需要了解什么是可迭代对象与迭代器：
 
@@ -125,7 +129,7 @@ for line in read_lines('large_file.txt'):
 
 
 
-#### 2.4.1.2.3 迭代式数据集
+#### 4.1.2.3 迭代式数据集
 
 自定义的迭代式数据集类型需要继承 `torch.utils.data.IterableDataset`，并且实现 `__iter__()`方法。因此这也要求：
 
@@ -138,7 +142,7 @@ for line in read_lines('large_file.txt'):
 
 
 
-#### 2.4.1.2.4 数据集的子集
+#### 4.1.2.4 数据集的子集
 
 `torch.utils.data.Subset` 类
 
@@ -155,7 +159,7 @@ class torch.utils.data.Subset(dataset, indices)
 
 
 
-#### 2.4.1.2.5 包装张量的数据集
+#### 4.1.2.5 包装张量的数据集
 
 `torch.utils.data.TensorDataset` 类
 
@@ -180,7 +184,7 @@ print(dataset[0])    # 输出: (X[0], y[0]) —— 第0个样本和其标签
 
 
 
-#### 2.4.1.2.6 包装多个不同种类数据集
+#### 4.1.2.6 包装多个不同种类数据集
 
 在一些场景中，我们需要将不同种类的数据一起训练，比如一些多模态模型的实现依赖将图片转化为文字描述，这种转化功能的训练集就需要包括图片和对应的描述
 
@@ -210,7 +214,7 @@ assert dict_stack[0] == {'image': images[0], 'text': texts[0]}
 
 
 
-#### 2.4.1.2.7 直接拼接数据集
+#### 4.1.2.7 直接拼接数据集
 
 `torch.utils.data.ChainDataset` 类
 
@@ -252,7 +256,7 @@ print(ds[4].shape)  # torch.Size([10]) —— 完全不同形状！
 
 
 
-#### 2.4.1.2.8 串联流式数据集
+#### 4.1.2.8 串联流式数据集
 
 `torch.utils.data.ChainDataset` 是用于**串联多个 `IterableDataset`** 的工具，按顺序迭代所有子数据集中的样本，适用于**流式数据、无法随机访问的大数据场景**。
 
@@ -262,7 +266,7 @@ class torch.utils.data.ChainDataset(datasets)
 
  
 
-### 2.4.1.3 采样器
+### 4.1.3 采样器
 
 在 PyTorch 里，**取样器（Sampler）** 是 `torch.utils.data.Sampler` 的子类，用于控制 **Dataset 中样本的索引顺序**。它一般和 `DataLoader` 搭配使用，主要是为了 **灵活控制数据的取样方式**，比如随机打乱、分层采样、加权采样、分布式采样等。
 
@@ -288,7 +292,7 @@ class torch.utils.data.ChainDataset(datasets)
 
 
 
-#### 2.4.1.3.1 顺序采样器
+#### 4.1.3.1 顺序采样器
 
 `torch.utils.data.SequentialSampler` 类
 
@@ -304,7 +308,7 @@ class torch.utils.data.SequentialSampler(data_source)
 
 
 
-#### 2.4.1.3.2 随机采样器
+#### 4.1.3.2 随机采样器
 
 `torch.utils.data.RandomSampler` 类
 
@@ -323,7 +327,7 @@ class torch.utils.data.RandomSampler(data_source, replacement=False, num_samples
 
 
 
-#### 2.4.1.3.3 从数据集特定子集中随机采样
+#### 4.1.3.3 从数据集特定子集中随机采样
 
 `torch.utils.data.SubsetRandomSampler` 类
 
@@ -340,7 +344,7 @@ class torch.utils.data.SubsetRandomSampler(indices, generator=None)
 
 
 
-#### 2.4.1.3.4 带权重随机取样
+#### 4.1.3.4 带权重随机取样
 
 `torch.utils.data.WeightedRandomSampler` 类
 
@@ -361,7 +365,7 @@ class torch.utils.data.WeightedRandomSampler(weights, num_samples, replacement=T
 
 
 
-#### 2.4.1.3.5 批次采样器
+#### 4.1.3.5 批次采样器
 
 `torch.utils.data.BatchSampler` 类
 
@@ -381,7 +385,7 @@ class torch.utils.data.BatchSampler(sampler, batch_size, drop_last)
   - 如果为 `True`，当最后一个批次不完整时，将其丢弃。
   - 如果为 `False`，保留最后一个不完整的批次。
 
-#### 2.4.1.3.6 多卡训练取样器
+#### 4.1.3.6 多卡训练取样器
 
 （了解就行，用的时候再细学即可）
 
@@ -406,7 +410,7 @@ class torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=None
 
 
 
-### 2.4.1.4 数据加载器
+### 4.1.4 数据加载器
 
 
 
@@ -434,7 +438,7 @@ pytorch 框架并没有对`torch.utils.data.DataLoader` 类提供很多具有不
 
 
 
-### 2.4.1.5 整理函数 collate function
+### 4.1.5 整理函数 collate function
 
 `torch.utils.data._utils.collate.collate` 函数
 
@@ -526,9 +530,9 @@ default_collate(batch) # 自动处理 `CustomType`
 
 
 
-## 2.4.2 数据的预处理
+## 4.2 数据的预处理
 
-### 2.4.2.1 图像数据的预处理
+### 4.2.1 图像数据的预处理
 
 在将图像输入到神经网络进行训练前，需要将图像处理成符合神经网络输入要求的张量，其中可能包括张量化、剪裁、压缩等步骤，这也被称为预处理。
 
@@ -536,7 +540,7 @@ default_collate(batch) # 自动处理 `CustomType`
 
 `torchvision` 中的 `transform` 模块提供了多种图像处理操作，下面将主要的几种展示在下面
 
-#### 2.4.2.1.1 图像转化为张量
+#### 4.2.1.1 图像转化为张量
 
  `transforms.ToTensor` 类型，其构造器为
 
@@ -566,7 +570,7 @@ torchvision.transforms.ToTensor()
 
 
 
-#### 2.4.2.1.2 图像标准归一化
+#### 4.2.1.2 图像标准归一化
 
 `transforms.Normalize `类
 
@@ -575,10 +579,6 @@ torchvision.transforms.ToTensor()
 ```python
 torchvision.transforms.Normalize(mean, std, inplace=False)
 ```
-
-该函数**假设输入图像每个通道上的像素值分布均服从正态分布**，并试图通过变换，**使每个通道的数据分布变成均值为 0、标准差为 1的标准正态分布**
-
-> 如果是工程使用，需要假设数据集的所有图像的每个通道的像素值各自服从一个正态分布，即要对所有图像的特定通道实行统一的归一化
 
 **参数说明**：
 
@@ -591,6 +591,8 @@ torchvision.transforms.Normalize(mean, std, inplace=False)
 ```
 output[channel] = (input[channel] - mean[channel]) / std[channel]
 ```
+
+该函数通过变换，**使每个通道的数据在维持原有分布类型的情况下，变成均值为 0、标准差为 1**
 
 要求输入必须是 `ToTensor()` 后的结果，即形状为 `[C, H, W]` 且值在 `[0.0, 1.0]` 范围内的浮点张量。
 
@@ -656,7 +658,7 @@ def one_chann_normalize():
 
 
 
-#### 2.4.2.1.3 图像缩放
+#### 4.2.1.3 图像缩放
 
 `transforms.Resize()`  类型
 
@@ -704,7 +706,7 @@ torchvision.transforms.Resize(size, interpolation=InterpolationMode.BILINEAR, ma
 
 
 
-#### 2.4.2.1.4 中心剪裁
+#### 4.2.1.4 中心剪裁
 
 `transforms.CenterCrop` 类负责中心剪裁图像
 
@@ -722,7 +724,7 @@ torchvision.transforms.CenterCrop(size)
   - 如果是 `int`，裁剪出一个 `size × size` 的正方形区域；
   - 如果是 `(H, W)`，则裁剪高度为 H、宽度为 W 的矩形，中心与原图一致。
 
-#### 2.4.2.1.5 普通随机剪裁
+#### 4.2.1.5 普通随机剪裁
 
 `transforms.RandomCrop` 类型可以实现一般的随机剪裁
 
@@ -758,7 +760,7 @@ torchvision.transforms.RandomCrop(
 
 
 
-#### 2.4.2.1.6 水平翻转
+#### 4.2.1.6 水平翻转
 
 `transforms.RandomHorizontalFlip` 类可以将图像转化成的张量进行水平翻转
 
@@ -800,7 +802,7 @@ torchvision.transforms.RandomHorizontalFlip(p=0.5)
 
 
 
-#### 2.4.2.1.7 增强的随机剪裁
+#### 4.2.1.7 增强的随机剪裁
 
 `transforms.RandomResizedCrop` 类型可以实现随机剪裁后缩放
 
@@ -828,7 +830,7 @@ torchvision.transforms.RandomResizedCrop(
 
 
 
-#### 2.4.2.1.8 图像填充
+#### 4.2.1.8 图像填充
 
 torchvision的transform模块提供了自己对于图像填充的实现： `transforms.Pad` 类
 
@@ -856,7 +858,7 @@ torchvision.transforms.Pad(
 
 
 
-#### 2.4.2.1.9 预处理组合
+#### 4.2.1.9 预处理组合
 
 `transforms.Compose` 类可以把上述对图形的变换任意组合，形成一个序列，实现链式调用。常用于构建完整的数据预处理流程。
 
@@ -883,7 +885,7 @@ transform = transforms.Compose([
 
 
 
-#### 2.4.1.10 自定义预处理行为
+#### 4.1.10 自定义预处理行为
 
 torchvision 的 transform 模块还支持将用户自定义的操作打包，灵活扩展功能。
 
@@ -901,7 +903,7 @@ transforms.Lambda(lambd)
 
 
 
-### 2.4.2.2 图像数据的导入
+### 4.2.2 图像数据的导入
 
 之前只介绍了抽象的数据集对象需要满足什么要求，实际上在torchvision的datasets模块中包含有 `ImageFolder` 类，该类型可以将如下格式的数据样本读取为数据集（每个子文件夹代表一个类别，子文件夹中的图像属于该类别）：
 
@@ -991,7 +993,7 @@ class torchvision.datasets.ImageFolder(
 
 
 
-### 2.4.2.3 文本数据集的组织方式
+### 4.2.3 文本数据集的组织方式
 
 1. **纯文本文件（.txt）**
 
@@ -1039,9 +1041,9 @@ text,label
 
 
 
-### 2.4.2.4文本数据集的常见预处理
+### 4.2.4文本数据集的常见预处理
 
-#### 2.4.2.4.1 预处理流程
+#### 4.2.4.1 预处理流程
 
 **加载数据**
 
@@ -1085,7 +1087,7 @@ text,label
 
 
 
-#### 2.4.2.4.2 torchtext 模块工具
+#### 4.2.4.2 torchtext 模块工具
 
 在新版 torchtext（0.12+）里，推荐的核心组件主要是：
 
