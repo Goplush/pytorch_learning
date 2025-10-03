@@ -1,4 +1,4 @@
-[TOC]
+
 
 
 
@@ -1253,7 +1253,7 @@ $$
 
 平均编码长度：
 $$
-H(p) = -\sum p(x) \log_2 p(x) = -(0.5 \log_2 0.5 + 0.25 \log_2 0.25 + 0.25 \log_2 0.25) = 1.5 \text{ 比特}
+H(p) = -\sum p(x) \log_2 p(x) \\= -(0.5 \log_2 0.5 + 0.25 \log_2 0.25 + 0.25 \log_2 0.25) = 1.5 \text{ 比特}
 $$
 
 这就是熵 $H(p)$ 的含义：用真实分布 $p$ 编码时的最小平均编码长度。
@@ -1347,6 +1347,20 @@ $$
 
 此外，**二元交叉熵损失函数也可以用于多标签的二分类**——有多个标签，每个样本可能属于多个类别（对每个类别来说都是二分类）。其方法可以概括为：每个类别独立进行二分类，输出层使用sigmoid激活，最后损失函数对每个类别分别计算BCE然后求和或平均。
 
+最后，可以看出，二元交叉熵，或者说 n 元交叉熵损失函数假设对于对于每一个具体的输入 $x_i$，其真实标签 $y_i$ 服从参数为 $ \mathbf{p}_i = f_\theta(x_i) $ 的 $n$ 项分布（Multinomial Distribution），这也是模型的输出不是一个给定的标签，而是 $n$ 个logist得分。
+
+上述说法的**数学表示**为：
+$$
+y_i | x_i \sim \text{Multinomial}(1, \mathbf{p}_i) = \text{Multinomial}(1, f_\theta(x_i))
+$$
+
+其中：
+
+- $ y_i \in \{0,1\}^K $ 是 one-hot 编码的真实标签  
+- $ \mathbf{p}_i = [p_{i1}, p_{i2}, \dots, p_{iK}] \in [0,1]^K $ 是模型预测的概率分布  
+- $ \sum_{k=1}^{K} p_{ik} = 1 $  
+- $ f_\theta(\cdot) $ 通常是带有 softmax 激活的神经网络
+
 
 
 
@@ -1415,8 +1429,600 @@ torch.nn.BCEWithLogitsLoss(
 
 这个类同样适用于传统二分类以及多标签的二分类。
 
+对于传统二分类，即要预测 **样本是否属于某一类**（例如“是否为猫”）：
+
+- **输入 (`input`)：**
+  - 形状：`(N,)` 或 `(N, 1)`
+  - 含义：网络对每个样本输出的 **logit 值**（未经过 sigmoid 的实数，可以正可以负）。
+- **目标 (`target`)：**
+  - 形状：`(N,)` 或 `(N, 1)`
+  - 含义：每个样本的真实标签，取值为 `0` 或 `1`。
+
+而对于多标签二分类，即一个样本可以同时属于 **多个类别**，例如：一张图片既是“猫”又是“可爱”，标签是多热（multi-hot）向量。
+
+- **输入 (`input`)：**
+  - 形状：`(N, C)`
+  - 含义：网络对每个样本的每个类别的 logit 值。
+    - `N` = batch size
+    - `C` = 类别数（每个类别都是独立的二分类）
+- **目标 (`target`)：**
+  - 形状：`(N, C)`
+  - 含义：真实标签的 multi-hot 向量，元素为 `0` 或 `1`。
+
+而 `weight` 和 `pos_weight` 两个参数则是分别用于缓解以上两种情况的类别不平衡的：
+
+`weight` 参数常用于多标签的类别权重平衡，它的作用是对 **每个元素的 loss** 乘以一个权重，因此**形状要求**为`(N, C)` 或可以广播成 `(N, C)`。这个的作用原理比较好理解，就不多赘述了
+
+- 通常来说，每个标签要乘的权重是相同的，如果真的要为每个样本都单独设计权重，那工作量就太大了
+
+而 `pos_weight` 则主要用于传统二分类的类别权重平衡——比如在**医疗诊断**中，**健康患者占比 99%，患病患者占 1%，如果采用标准的二元交叉熵损失函数，模型很可能会学会"总是预测负类"也能获得较低的总体损失**。因此**可以为样本量少的标签设置大于一的权值**，来让模型更多的学习来自这个标签的损失：
+
+当设置 $\text{pos\_weight} = \alpha$ 时，损失函数变为：
+$$
+L = -[\alpha \cdot y \cdot \log(\sigma(x)) + (1 - y) \cdot \log(1 - \sigma(x))]
+$$
+其中：
+- $x$ : logits（模型输出）
+- $y$ : 真实标签（0 或 1）
+- $\sigma(x)$ : sigmoid 函数
+
+注意到正样本（$y=1$）的损失被放大了 $\alpha$ 倍，而负样本（$y=0$）的损失保持不变——这也是**pytorch框架识别少数样本的方式：依赖用户将少数样本标记为正样本`1`。**
+
+`pos_ weight` 参数在初始值的设置上通常参考正负样本的比例：`pos_weight = num_neg / num_pos` ，在训练或者测试中，也可以根据相关指标调整该参数：
+
+- 如果召回率太低，适当增大 pos_weight
+- 如果精确率太低，适当减小 pos_weight
+
+多标签二分类也能使用 `pos_weight`参数，只需要为每个标签都设置正样本权重即可（`pos_weight` 为一个**长度等于类别数量**的向量，其中**每个位置对应一个类别的正样本权重**。）
+
+
+
+#### 3.2.4 Hinge Loss 与 SoftMargin Loss
+
+首先回顾一下标准二元交叉熵损失函数**（标签在 {0,1}）**，对于样本  $(x,y )$
+$$
+\mathcal{L}_{\text{BCE}} = -\left[ y \log(\sigma(f) + (1-y)\log(1-\sigma(f)) \right]
+$$
+其中
+
+- $ f $ : 等价于 $ f(x) $，代表着logits（模型输出）
+- $ y $ : 真实标签（0 或 1）
+- $\sigma(f)$ : sigmoid 函数
+
+而设新的标签 $y' \in \{-1, +1\}$，并且：
+$$
+y = \frac{y' + 1}{2}  \quad \Leftrightarrow \quad y' = 2y - 1
+$$
+代入 BCE，整理后确实能得到：
+$$
+\mathcal{L}' = \log \left(1 + \exp(-y' f)\right)
+$$
+而PyTorch 的 `nn.SoftMarginLoss` 定义就是：
+$$
+\mathcal{L}_{\text{SoftMargin}}(f,y') = \frac{1}{N} \sum_{i=1}^N \log(1 + \exp(-y'_i f_i))
+$$
+就是上面 $\mathcal{L}'$ 的批次形式，因此——
+
+**SoftMarginLoss 本质上就是 Binary Cross-Entropy 损失在标签 $\{-1,+1\}$ 情况下的等价形式**。因此二者在使用上的效果基本也是一致的
+
+（本部分要介绍的主要内容到此就结束了，下面是关于 SoftMargin loss 来源的说明，顺便补充对于 SVM，支持向量机，有关的内容，不重要，可以跳过）
+
+---
+
+其实soft margin 损失函数不是对于二元交叉熵损失函数的巧妙模仿，而是对另一个函数的有效改进——这就是我们标题在的另一个损失函数 Hinge Loss。
+
+Hinge Loss 是支持向量机（SVM）中常用的损失函数，**用于二分类任务**。它的目标是最大化分类间隔（margin），从而提高模型的泛化能力。
+
+对于一个样本 $(x_i, y_i)$，其中：
+- $y_i \in \{-1, +1\}$ 是真实标签，
+- $f(x_i)$ 是模型的原始输出（未经过 sigmoid 或 softmax 的“得分”或“logit”），
+
+Hinge Loss 的定义为：
+$$
+\mathcal{L}_{\text{hinge}} = \max(0, 1 - y_i \cdot f(x_i))
+$$
+
+直观理解：
+- 如果 $y_i f(x_i) \geq 1$，说明样本被正确分类且置信度足够高（在“安全边界”之外），损失为 0。
+- 如果 $y_i f(x_i) < 1$，说明样本要么分类错误，要么虽分类正确但置信度不够（在边界内），此时会产生正的损失。
+
+Hinge Loss 的特点是不可导（在 $y_i f(x_i) = 1$ 处不可导），且对正确分类但靠近边界的样本也会惩罚。
+
+为了解释 Hinge Loss 最大化分类间隔的优化原理，我们着重看 $y_i\cdot f(x_i)$ 的部分，把它称之为函数间隔，记为 $\hat\gamma_i$
+
+如果分类正确，$\hat\gamma_i=y_i f(x_i) \gt 0$，这里依赖于二分类 $y_i \in \{-1, +1\}$ 的规定：如果标签 $y_i$ 为正数，预测器应当输出正数，反之亦然。
+
+而且函数间隔 $\hat{\gamma}_i = y_i f(x_i)$ 反映了**离决策边界的距离**（在权重未归一化的情况下是比例距离），它越大，意味着 $x_i$ 离分隔超曲面越远，因此分类器“更确信”该点属于其类别。
+
+因此， **Hinge Loss 实际上是在惩罚函数间隔小于 1 的样本**。
+
+但是函数间隔会受到函数本身缩放的影响，这里举个简单的例子：对于一个连续的预测函数 $ f $，将其放大1e100倍，即 $ f' = 10^{100}f $，此时所有的输出都显著更加远离了决策边界，但是实际上的决策边界仍然没有改变，这使得需要引入额外的限制才能保证训练结果的有效性。
+
+再加上hinge loss 只给了一个几何 margin 的间隔解释，**没有概率意义**。而logistic / cross-entropy 可以自然接在 sigmoid/softmax 之后，直接输出“概率分布”，这对分类、检测、语言建模等任务都至关重要。
+
+以及 hinge loss 在 margin $y f(x) = 1$ 的地方有**不可导点**。使得反向传播稳定性不足。这些缺点使得 hinge loss基本只出现在SVM中
+
+在 SVM 中，预测函数为一个线性函数
+$$
+f(x_i)=w^\top x_i + b
+$$
+其中 $\omega$ 为可学习的权重向量，$b$ 为可学习的偏置。
+
+那 SVM 预测函数的函数间隔就是
+$$
+\hat{\gamma}_i = y_i (w^\top x_i + b)
+$$
+此时，在决策边界固定的情况下，可以方便的通过约束 $\|\omega\|$ 来约束函数的缩放对输出的影响，参考几何距离 $ \gamma_i $​ 可以方便的证明这一点
+$$
+\gamma_i = \frac{y_i (w^\top x_i + b)}{\|w\|} = \frac{\hat{\gamma}_i}{\|w\|}
+$$
+下面给出 SVM 的标准损失函数（优化问题）：
+$$
+\min_{w,b} \quad \frac{1}{2} \|w\|^2 + C \sum_{i=1}^{n} \max\left(0, 1 - y_i (w^\top x_i + b)\right)
+$$
+这个目标函数包含两部分：
+
+1. 正则项 $\frac{1}{2} \|w\|^2$：
+   - 控制模型复杂度；
+   - **等价于最大化几何间隔**：因为几何间隔 $\gamma = \frac{1}{\|w\|}$（当函数间隔被约束为 $\geq 1$ 时），所以最小化 $\|w\|$ 就是最大化 $\gamma$。
+   
+2. Hinge Loss 项 $\sum \max(0, 1 - y_i f(x_i))$：
+   - 惩罚那些函数间隔 $< 1$ 的样本（包括错分和靠近边界的样本）；
+   - 允许一些样本违反间隔约束（通过参数 $C$ 控制容忍度），即“软间隔 SVM”。
+
+我们可以看出，损失函数的第一部分已经做到了最大化几何间隔，下面介绍第二部分的作用
+
+对于现实情况下数据存在噪声，而且决策分界往往本身非线性的情况：SVM 通过引入 松弛变量（slack variables）$\xi_i \geq 0$ 来放松约束：
+$$
+y_i (w^\top x_i + b) \geq 1 - \xi_i, \quad \xi_i \geq 0
+$$
+
+- 如果 $\xi_i = 0$：样本在正确一侧且在间隔外（理想情况）
+- 如果 $0 < \xi_i < 1$：样本在间隔内，但分类正确
+- 如果 $\xi_i \geq 1$：样本被错误分类
+
+因此，优化目标可以表示为：
+$$
+\min_{w,b,\xi} \quad \frac{1}{2} \|w\|^2 + C \sum_{i=1}^{n} \xi_i
+$$
+
+其中：
+- $\frac{1}{2} \|w\|^2$：仍然鼓励大间隔（即小 $\|w\|$）
+- $\sum \xi_i$：代表总分类误差（由 Hinge Loss 等价表达）
+- $C > 0$：正则化参数，控制“间隔最大化”和“分类准确率”之间的权衡
+
+上面的优化目标就是
+$$
+\min_{w,b} \quad \frac{1}{2} \|w\|^2 + C \sum_{i=1}^{n} \max\left(0, 1 - y_i (w^\top x_i + b)\right)
+$$
+
+
+#### 3.2.5 Dice Loss
+
+Dice Loss 源于 **Dice 系数**（Dice Coefficient），也称为 **Sørensen-Dice 系数**，最初用于衡量两个集合的相似度。Dice Loss **主要应用于图像分割**，在医学图像分割领域，Dice Loss 因其对类别不平衡问题的良好处理能力而广受欢迎。
+
+> 图像分割任务的本质，实际上还是判断某个像素点是否属于
+
+对于两个集合 $A$ 和 $B$，Dice 系数定义为：
+$$
+DSC = \frac{2|A \cap B|}{|A| + |B|}
+$$
+
+其中：
+- $|A \cap B|$ 是两个集合的交集大小
+- $|A|$ 和 $|B|$ 分别是两个集合的大小
+
+将其应用在图像分割中：
+- $A$ 表示预测的分割结果
+- $B$ 表示真实的标签（ground truth）
+- Dice 系数范围：$[0, 1]$，值越大表示分割效果越好
+
+Dice Loss 是 Dice 系数的补集，其一般形式为：
+$$
+\text{Dice Loss} = 1 - DSC = 1 - \frac{2|A \cap B|}{|A| + |B|}
+$$
+对于二值分割，设：
+- $p_i$ 为第 $i$ 个像素的预测概率（0-1之间）
+- $g_i$ 为第 $ i $ 个像素的真实标签（0 或 1）
+
+Dice Loss通常表示为：
+$$
+\text{Dice Loss} = 1 - \frac{2 \sum_{i=1}^{N} p_i g_i + \epsilon}{\sum_{i=1}^{N} p_i^2 + \sum_{i=1}^{N} g_i^2 + \epsilon}
+$$
+其中 $ \epsilon $ 为为了避免分母为零的情况加入的平滑因子，通常取 $10^{-5}$ 或 $ 10^{-8} $
+
+对于多类别分割（$C$ 个类别），有以下几种处理方式：
+
+首先是直接求平均值：
+$$
+\text{Dice Loss} = \frac{1}{C} \sum_{c=1}^{C} \left(1 - \frac{2 \sum_{i=1}^{N} p_{i,c} g_{i,c} + \epsilon}{\sum_{i=1}^{N} p_{i,c}^2 + \sum_{i=1}^{N} g_{i,c}^2 + \epsilon}\right)
+$$
+对于类别不平衡，也可以为不同类别分配不同权重 $w_c$：
+$$
+\text{Dice Loss} = \sum_{c=1}^{C} w_c \left(1 - \frac{2 \sum_{i=1}^{N} p_{i,c} g_{i,c} + \epsilon}{\sum_{i=1}^{N} p_{i,c}^2 + \sum_{i=1}^{N} g_{i,c}^2 + \epsilon}\right)
+$$
+Dice Loss的核心优势为对不平衡的小目标有更好的效果，这种优势来源于其分母为两个集合的大小之和，下面从 loss 本身和梯度两方面分析
+
+首先，对于极端小的目标，Dice Loss 在学习初期能让模型更好的学习到小目标的识别
+
+举个例子，假设真实小目标只有 3 个像素：
+
+- **完全漏检**时，$\text{Dice Loss} = 1 - 0 = 1.0$；
+- **检测到2个像素（漏掉1个）**时， $\text{Dice Loss} = 1 - \frac{2 \times 2}{2 + 3} = 1 - \frac{4}{5} = 0.2$；
+- **检测到4个像素（多识别1个）**时，$\text{Dice Loss} = 1 - \frac{2 \times 3}{4 + 3} = 1 - \frac{6}{7} = \frac{1}{7}$
+
+可见对于小目标的存在性检测上， Dice Loss 鼓励模型优先识别到小目标，在识别到的基础上进行边界的优化。这种对存在性识别的鼓励本质上来源于其梯度特性，对于预测概率 $p_i$，Dice Loss 的梯度为：
+$$
+\frac{\partial \text{Dice Loss}}{\partial p_i} = -\frac{2g_i (|A| + |B|) - 2|A \cap B| \cdot 2p_i}{(|A| + |B|)^2}
+$$
+
+当 $|B|$ 很小时（小目标），分母 $(|A| + |B|)^2$ 也很小，导致梯度幅值更大。
+
+
+
+#### 3.2.6 对抗损失函数
+
+Adversarial 损失函数（对抗损失函数）是生成对抗网络（Generative Adversarial Networks, GANs）中的核心组成部分，由 Ian Goodfellow 等人在 2014 年首次提出。它的设计思想来源于博弈论中的“二人零和博弈”：一个生成器（Generator）试图生成逼真的假数据，而一个判别器（Discriminator）则试图区分真实数据和生成的假数据。两者在训练过程中相互对抗、共同进化。
+
+它的基本思想是就是 GAN 本身的运行逻辑：
+
+GAN 包含两个神经网络：
+
+- **生成器 G(z)**：接收一个随机噪声向量 $ z $（通常从标准正态分布或均匀分布中采样），输出一个假样本 $ G(z) $，试图模仿真实数据分布。
+
+- **判别器 D(x)**：接收一个样本 $ x $（可以是真实数据或生成器生成的假数据），输出一个标量，表示该样本为“真实”的概率（通常在 [0,1] 区间）。
+
+对抗损失函数的目标是：
+
+- **判别器 D**：最大化其正确分类真实样本和假样本的能力。
+- **生成器 G**：最小化判别器识别其生成样本为“假”的能力（即“欺骗”判别器）。
+
+
+
+
+最经典的对抗损失函数是 Minmax Loss，它直观地反映了 GAN 网络的需求：
+$$
+\min_G \max_D V(D, G) = \mathbb{E}_{x \sim p_{\text{data}}(x)} [\log D(x)] + \mathbb{E}_{z \sim p_z(z)} [\log(1 - D(G(z)))]
+$$
+其中：
+
+- $ G $ 是生成器（Generator），输入随机噪声 $ z \sim p_z(z) $（如标准正态分布），输出假样本 $ G(z) $。
+- $ D $ 是判别器（Discriminator），输入真实样本 $x$ 或生成样本 $ G(z) $，输出一个概率值（表示输入是真实数据的概率）。
+- $ p_{\text{data}}(x) $ 是真实数据的分布。
+- $ p_z(z) $ 是噪声的先验分布（通常为高斯或均匀分布）。
+- $ V(D, G) $ 是判别器和生成器的价值函数（value function）。
+
+这个目标函数是一个极小极大问题：
+
+- **内层（$ \max_D $）**：固定生成器 $ G $，训练判别器 $ D $ 使其尽可能区分真实样本和生成样本（即最大化 $ V(D, G) $），也即对判别器 $ D $ 而言：
+  - $\mathbb{E}_{x \sim p_{\text{data}}(x)} [\log D(x)]$ 尽量大说明判别器对真实样本输出尽量高
+  - $\mathbb{E}_{z \sim p_z(z)} [\log(1 - D(G(z)))]$ 尽量大说明判别器对伪造样本输出尽量低
+- **外层（$ \min_G $）**：固定判别器 $ D $，训练生成器 $ G $ 使其生成的样本尽可能“欺骗”判别器（即最小化 $ V(D, G) $）。
+
+
+
+在实践中，当生成器刚开始训练时，$ D(G(z)) $ 接近 0，导致 $ \log(1 - D(G(z))) $ 的梯度非常小（梯度消失），训练困难。
+
+因此，实践中通常采用**非饱和版本**的生成器损失：
+
+- **判别器损失（不变）**：
+
+$$
+\mathcal{L}_D = -\mathbb{E}_{x \sim p_{\text{data}}} [\log D(x)] - \mathbb{E}_{z \sim p_z} [\log(1 - D(G(z)))]
+$$
+
+- **生成器损失（改为最大化 $ \log D(G(z)) $）**：
+
+$$
+\mathcal{L}_G = -\mathbb{E}_{z \sim p_z} [\log D(G(z))]
+$$
+
+这样，当 D 认为 G(z) 是假的（即 $ D(G(z)) \approx 0 $）时，$ \log D(G(z)) $ 会趋向负无穷，梯度较大，有利于 G 的早期训练。
+
+
+
+对于对抗损失函数，在实践中最常用的就是上述的非饱和的 MinMax 损失函数；
+
+
+
+此外，之前介绍的 Hinge Loss 也在对抗模型中有广泛的应用：
+
+ - **判别器损失：**
+
+$$
+  \mathcal{L}_D = \mathbb{E}[\max(0, 1 - D(x))] + \mathbb{E}[\max(0, 1 + D(G(z)))]
+$$
+
+  - **生成器损失：**
+
+$$
+\mathcal{L}_G = -\mathbb{E}[D(G(z))]
+$$
+
+对抗的 Hinge Loss 的优势主要体现在工程上：
+
+- 在高分辨率图像生成中表现优异；
+  - 被 BigGAN（2019）、StyleGAN / StyleGAN2 / StyleGAN3（NVIDIA）等 SOTA 模型广泛采用；
+  - 梯度更“平滑”，有助于稳定训练大规模生成器；
+  - 不强制输出概率（D 可输出任意实数），更灵活。
+
+
+
+最后介绍一下 GAN 交替进行的训练模式：
+
+1. **更新判别器 D（固定 G）**：
+
+   - 从真实数据中采样一批 $ x $，计算损失：$ -\log D(x) $
+   - 从噪声中采样一批 $ z $，生成假样本 $ G(z) $，计算损失：$ -\log(1 - D(G(z))) $
+   - 总判别器损失：$ L_D = -\mathbb{E}[\log D(x)] - \mathbb{E}[\log(1 - D(G(z)))] $
+   - 最小化 $ L_D $（等价于最大化 $ V(D, G) $）
+
+2. **更新生成器 G（固定 D）**：
+   - 从噪声中采样 $ z $，生成 $ G(z) $
+   - 生成器损失：$ L_G = -\mathbb{E}[\log D(G(z))] $ （注意：这里使用了非饱和的 Min-Max 形式）
+   - 最小化 $ L_G $
+
+而 GAN 的理论最优则是依据纳什均衡得到：
+
+- 判别器无法区分真假：$ D^*(x) = \frac{1}{2} $ 对所有 $x$
+- 生成器完美模仿真实分布：$ p_g(x) = p_{\text{data}}(x) $
+
+此时价值函数达到全局最优值：
+
+$$
+V(D^*, G^*) = \log(1/2) + \log(1/2) = -2 \log 2 \approx -1.386
+$$
+
+这说明 Min-Max 损失在理论上可以引导生成器学习到真实数据分布。
+
+
+
+
+
+#### 3.2.7 重构损失函数
+
+重构损失（Reconstruction Loss）是深度学习中**一类用于衡量模型重建输出与原始输入之间差异的损失函数**。它主要用于自编码器（Autoencoder）、生成模型等架构中。
+
+“重构”的核心思想是：模型接收输入数据后通过编码器压缩为低维表示（**潜在空间表示**），然后通过解码器重建原始输入，最后**重构损失衡量重建结果与原始输入的相似程度**。
+
+重构损失函数的一般表示为：
+$$
+\mathcal{L}_{\text{recon}} = D(x, \hat{x})
+$$
+其中：
+
+- 原始输入：$ x \in \mathbb{R}^n $
+- 重建输出：$ \hat{x} = g(f(x)) \in \mathbb{R}^n $
+- $ f(\cdot) $ 是编码器，$ g(\cdot) $ 是解码器
+- $ D(\cdot, \cdot) $ 是某种距离度量函数（如 MSE、L1、SSIM 等），用于衡量原始输入与重建输出之间的差异。
+
+常见的重构损失函数就是本部分开头所讲的：
+
+- 均方误差损失函数，也被称为 L2 损失函数
+- 平均绝对误差损失函数，也被称为 L1 损失函数
+- 二元交叉熵损失函数
+
+其中 L2、L1 指的是向量的 **"Lp范数"（Lp Norm）**，具体而言，是**模型输出向量对真实向量的损失向量的范数**，数学表示为：
+
+- **L1 损失**：  $\mathcal{L}_1 = \| \mathbf{y} - \hat{\mathbf{y}} \|_1 = \sum_i |y_i - \hat{y}_i|$
+- **L2 损失**： $ \mathcal{L}_2 = \| \mathbf{y} - \hat{\mathbf{y}} \|_2^2 = \sum_i (y_i - \hat{y}_i)^2$
+
+
+
+对于重构损失函数，在应用上通常不要求模型读取输入后重构整个输入，而是读取被随机掩码的样本，在隐空间内预测被打码的信息，主要原因有以下两点：
+
+- 完整重建的要求使得模型可能学习到"恒等映射"，缺乏泛化能力
+- 而掩码重建：
+  - 降低了学习时的计算量
+  - 强制模型学习数据的内在结构和上下文关系
+
+对于掩码训练，主要有以下几种模式：
+
+- 去噪自编码器（Denoising Autoencoder, DAE）
+
+  ```python
+  # 输入添加噪声
+  x_noisy = x + noise
+  # 或者随机置零（类似dropout）
+  mask = torch.rand_like(x) > corruption_rate
+  x_corrupted = x * mask
+  
+  # 训练目标：从损坏数据重建原始数据
+  loss = reconstruction_loss(x, decoder(encoder(x_corrupted)))
+  ```
+
+- 掩码自编码器（Masked Autoencoder, MAE），这是近年来非常流行的方法，常用于**Vision Transformer（ViT）**的训练中：
+
+  ```python
+  class MaskedAutoencoder:
+      def __init__(self, mask_ratio=0.75):
+          self.mask_ratio = mask_ratio
+      
+      def forward(self, x):
+          # 1. 将图像分块
+          patches = self.patchify(x)  # [B, N, D]
+          
+          # 2. 随机掩码大部分patch
+          ids_shuffle, ids_restore = self.random_masking(patches, self.mask_ratio)
+          visible_patches = patches.gather(1, ids_shuffle[:, :num_visible])
+          
+          # 3. 只对可见patch进行编码
+          encoded = self.encoder(visible_patches)
+          
+          # 4. 解码器重建所有patch（包括被掩码的）
+          decoded = self.decoder(encoded, ids_restore)
+          
+          # 5. 只计算被掩码部分的重构损失
+          loss = self.reconstruction_loss(
+              target_patches[:, masked_indices], 
+              decoded[:, masked_indices]
+          )
+          return loss
+  ```
+
+  - 它的关键特点有：
+    - **高掩码率**：通常掩码75%的数据
+    - **仅计算掩码部分损失**：提高训练效率
+    - **不对称架构**：编码器轻量，解码器重
+
+- Bert 风格的掩码（**MLM 任务**）
+
+  - 主要应用于 NLP 领域：
+    - 输入序列: [CLS] The cat [MASK] on the mat [SEP]
+    - 目标：预测被[MASK]位置的原始词"sat"
+    - 损失：只计算被掩码位置的交叉熵损失
+  - 它主要应用于 Bert 模型的训练与继续训练（利用特定任务或特定领域的语料对预训练模型进行继续训练）
+
+
+
 ###  3.3 自定义损失函数
 
+介绍自定义损失函数前，我们需要先了解 pytorch 的自动求导方法，这个我单独找了一个笔记 `ch3/extra/autograd.md`，简单来说就是在上一章中介绍过的：将运算以图的形式组织起来
+
+<img src="D:\data\repos\pytorch_learning\ch3\assets\image-20251003203941039.png" alt="image-20251003203941039" style="zoom:50%;" />
+
+在计算损失函数值的时候是沿着边的指向正向传播（`forward`），而在计算梯度的时候则是反着边的指向传播（`backward`）。
+
+因此，自定义损失函数时，需要着重定义的也就是这两个方法。
+
+下面介绍两种常见的自定义损失函数的方式
+
+#### 3.3.1 继承 nn.module 类
+
+这种方法主要用于将**可以在运算图中追踪梯度的运算**组合成损失函数。这包括了 pytorch 框架提供的全部基础运算、全部开箱即用的损失函数类等等。
+
+符合条件的操作，也被称为是 **pytorch 可微分的**，可以通过下面的代码判断某个操作是否是 pytorch 可微分的
+
+```python
+def torch_autograd_test():
+    # 测试操作是否可微分
+
+    def test_operation(x:torch.Tensor):
+        #该方法为需要测试是否是pytorch可微分的方法
+        #the operation to be tested
+        return x.add(x)
+
+    x = torch.randn(3, 3, requires_grad=True)
+    try:
+        y = test_operation(x)
+        loss = y.sum()
+        loss.backward()
+        print("可微分！梯度存在:", x.grad is not None)
+    except:
+        print("不可微分！")
+```
+
+在该例子中，由于仅使用了 pytorch 本身的操作，所以操作是可微的，因此输出
+
+```
+可微分！梯度存在: True
+```
 
 
-### 3.4 损失函数的使用方法
+
+定义的一般步骤为：
+
+1. 在构造函数中设置超参数、检查参数有效性等
+2. 定义 `forward` 方法，通常至少包括 `output` 和 `target` 两个参数，前者指模型网络的输出，后者指期望的输出（真实数据，比如真实标签、被mask的文本、真实图像……）
+
+因为 pytorch 已知每个操作的梯度规则，所以 pytroch 可以**完全自动微分**，无需手动实现 `backward` 方法。
+
+
+
+这里给一个自定义将多个已知损失函数加权求和的损失函数作为例子（假设已知的损失函数都是pytorch可微分的）：
+
+```python
+class MultiTaskLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # 使用PyTorch内置损失函数
+        self.mse_loss = nn.MSELoss()
+        self.l1_loss = nn.L1Loss()
+    
+    def forward(self, pred, target, anchor, pos, neg):
+        loss1 = self.mse_loss(pred, target)
+        loss2 = self.l1_loss(pred, target) 
+        
+        return 0.5 * loss1 + 0.5 * loss2
+```
+
+
+
+#### 3.3.2 继承 Function 类（创建自定义 Function）
+
+> 本部分的梯度和偏导可以视为等同概念，但是仅限本部分
+
+由于 pytorch 并不是专门的计算库，一些复杂的运算可能没法方便的组合出来，或者即使可以，编程的难度也会很高。因此可以通过创建自定义的 Function 类来引入非 pytorch 的操作。（通常情况下都是转化为最基础最常用的矩阵运算库numpy的 nparray 类型进行操作）
+
+由于转化成numpy数组的操作以及numpy运算并不是pytorch可微分的，所以在这种方法中pytorch框架无法自动追踪梯度从而实现自动求导，因此继承 Function 类后构建自定义损失函数的一般方法为：
+
+1. 在构造函数中设置超参数、检查参数有效性等
+2. 定义**静态的 `forward` 方法**
+3. 定义**静态的 `backward` 方法**，至少包含 `grad_output` 参数：
+   - 功能是作为链式求导的上游梯度，即 $\frac{\partial \text{loss}}{\partial \text{input}} = \left( \frac{\partial \text{loss}}{\partial \text{output}} \right) \times \left( \frac{\partial \text{output}}{\partial \text{input}} \right)$ 中的前者
+   - 形状上和 `forward` 方法的输出一致
+   - 当 `forward` 方法有多个输出时，`backward` 方法也有多个输入，分别计算每个输出对输入的梯度后和 `grad_output` 相乘、求和作为梯度输出
+
+此处特地要求 `forward` 和 `backward` 方法是静态的是为了能直接引入 `ctx` 参数，`ctx` 是pytorch 框架为每个运算图节点维护的一个参数，在计算梯度时可以用于在 `forward` 和 `backward` 方法间传递信息。
+
+**在 PyTorch 的自定义 `Function` 中，`ctx` 必须作为静态方法的第一个参数**，这是 PyTorch 框架的硬性约定。
+
+在 `backward` 方法中最常用的就是 `ctx.save_for_backward()` 方法，它可以保存张量，供反向传播使用
+
+```python
+class CustomFunction(Function):
+    @staticmethod
+    def forward(ctx, input, weight):
+        # 保存输入张量，供backward使用
+        ctx.save_for_backward(input, weight)
+        
+        # 执行前向计算
+        output = input * weight
+        return output
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        # 获取保存的张量
+        input, weight = ctx.saved_tensors
+        
+        # 计算梯度（偏导）
+        grad_input = grad_output * weight
+        grad_weight = grad_output * input
+        
+        return grad_input, grad_weight
+```
+
+
+
+`ctx.mark_non_differentiable()` 方法可以标记某些输出为不可微分，但是只作为标记，需要开发者读取标记后进行特殊处理（即不求偏导）：
+
+```python
+class ArgMaxFunction(Function):
+    @staticmethod
+    def forward(ctx, input):
+        # argmax的结果是索引，不可微分
+        result = torch.argmax(input, dim=1)
+        ctx.mark_non_differentiable(result)
+        ctx.save_for_backward(input)
+        return result
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        # 对于不可微分的输出，grad_output为None
+        input, = ctx.saved_tensors
+        # 返回与输入对应的梯度（这里简化处理）
+        return torch.zeros_like(input)
+```
+
+
+
+从 `backward` 方法的说明中我们也能看出，**自动微分的本质就是局部梯度的组合**：
+
+- 每个操作都是一个"黑盒"，只需要知道输入→输出的关系
+- 反向传播时，每个黑盒只需要知道：给定输出梯度，如何计算输入梯度
+- 整个系统的梯度就是这些局部梯度通过链式法则组合起来的结果
+
+
+
+
+
