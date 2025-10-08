@@ -2018,7 +2018,7 @@ class ArgMaxFunction(Function):
 
 从 `backward` 方法的说明中我们也能看出，**自动微分的本质就是局部梯度的组合**：
 
-- 每个操作都是一个"黑盒"，只需要知道输入→输出的关系
+- 每个操作都是一个"黑盒"，只需要知道输入到输出的关系
 - 反向传播时，每个黑盒只需要知道：给定输出梯度，如何计算输入梯度
 - 整个系统的梯度就是这些局部梯度通过链式法则组合起来的结果
 
@@ -2084,10 +2084,499 @@ class ArgMaxFunction(Function):
 
 
 
-#### 4.2.2 验证集
+### 4.3 验证集
 
 在模型的所有超参数确定之前，我们原则上不应使用测试集。如果在模型选择过程中依赖测试数据，可能会导致模型对测试集产生过拟合，这将带来严重问题。当我们对训练集过拟合时，还可以通过测试集上的表现来判断；但若过拟合的是测试集本身，我们就失去了评估泛化能力的可靠依据。因此，绝不能依赖测试集进行模型选择，但反过来，如果只依赖训练数据，我们也无法准确估计模型的真实泛化误差。
 
 实际应用中情况更为复杂。理想情况下，测试集应仅使用一次——用于最终评估或模型比较。但现实中，我们很少能在每次实验时都使用全新的测试集，测试数据往往会被反复使用。
 
 常见的解决方案是将数据划分为三部分：**除了训练集和测试集之外，增加一个“验证集”**。但值得注意的是，实践中验证集与测试集之间的界限常常模糊不清。一种常见的实践是将训练集的一部分划作验证集，**验证集不参与训练，只作为训练过程中可以反复使用的评估指标。**
+
+
+
+## 5 定义网络
+
+`nn.Module` 是 PyTorch 中 `torch.nn` 模块提供的一个基类，所有神经网络模块（包括层和模型）都继承自它。用户可以通过继承 `nn.Module` 来定义自己的神经网络模型。
+
+在 PyTorch 中，当我们通过继承 `torch.nn.Module` 类来定义自己的模型时，通常需要实现两个关键方法：
+
+1. **`__init__` 方法（初始化）**：
+   - 用于定义模型中使用的**层（layers）**、**参数（parameters）** 和**子模块（submodules）**。
+   - 例如：线性层（`nn.Linear`）、卷积层（`nn.Conv2d`）、激活函数（如 `nn.ReLU`）、Dropout 等。
+   - 这些组件在 `__init__` 中被创建并赋值为类的属性（通常以 `self.xxx` 的形式）。
+2. **`forward` 方法（前向传播 / 数据流向定义）**：
+   - 定义输入数据如何通过模型中的各个层进行计算，最终得到输出。
+   - PyTorch 会自动根据 `forward` 中的操作构建计算图，用于反向传播和梯度计算。
+   - 用户**不需要**显式定义 `backward` 方法（除非有特殊需求），PyTorch 会自动处理。
+
+**通常情况下不需要在定义网络时关注反向传播 `backward` 过程**，因为在层次化的人工神经网络中，如果需要自定义反向传播，**应该在对应的操作/层级别实现**，而不是在网络整体层面处理。
+
+但是 `forward` 方法对模型的运行很重要，因为 pytorch 框架是依据该方法对网络的组织构建运算图，并自动求偏导、反向传播的。也即：**在 PyTorch 中，`__init__` 定义了网络的组成部件，而 `forward()` 的执行过程才真正构建计算图并决定网络的运算路径。**
+
+此外，对于绝大多数在pytorch框架内或者数据流最终流回pytorch计算图的 `nn.Module` ，这些模块有着**调用上的一致性**：它们都可以用 `module(input)` 的方式调用
+
+### 5.1 直接继承
+
+通过上面的说明，我们可以用如下方法定义一个三层的人工神经网络：
+
+```python
+#导入所需的库
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+#继承 nn.Module 并重写 __init__ 和 forward 方法。
+class MyNet(nn.Module):
+    def __init__(self):
+        super(MyNet, self).__init__()
+        # 定义网络层
+        self.fc1 = nn.Linear(784, 256)   # 输入层 -> 隐藏层1
+        self.fc2 = nn.Linear(256, 128)   # 隐藏层1 -> 隐藏层2
+        self.fc3 = nn.Linear(128, 10)    # 隐藏层2 -> 输出层
+
+    def forward(self, x):
+        # 定义前向传播过程
+        x = F.relu(self.fc1(x))   # 第一层 + ReLU 激活
+        x = F.relu(self.fc2(x))   # 第二层 + ReLU 激活
+        x = self.fc3(x)           # 输出层（未加 softmax）
+        return x
+
+#创建模型实例
+model = MyNet()
+print(model)
+
+```
+
+如上所述，`forward()` 方法才是真正构建网络层次。
+
+上述代码的输出为
+
+```
+MyNet(
+  (fc1): Linear(in_features=784, out_features=256, bias=True)
+  (fc2): Linear(in_features=256, out_features=128, bias=True)
+  (fc3): Linear(in_features=128, out_features=10, bias=True)
+)
+```
+
+
+
+因为 pytorch 将网络的输出和激活函数分开处理，所以对于形式固定的激活函数，通常都是在 `forward` 方法中直接使用开箱即用的 pytorch 类的。
+
+但是，对于带可学习参数的激活函数，如 `PReLU` ，因为**其作为网络训练的一部分，而不止是对输出进行固定的非线性变换**，所以必须在 `__init__()` 方法中进行定义
+
+示例代码如下
+
+```python
+import torch
+import torch.nn as nn
+
+class MyNet2(nn.Module):
+    def __init__(self):
+        super(MyNet, self).__init__()
+        # 定义层
+        self.fc1 = nn.Linear(784, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc3 = nn.Linear(128, 10)
+        
+        # 定义激活函数
+        self.relu = nn.ReLU()
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        x = self.relu(self.fc1(x))   # 使用在 __init__ 中定义的 ReLU
+        x = self.relu(self.fc2(x))
+        x = self.fc3(x)
+        x = self.softmax(x)          # 输出用 Softmax
+        return x
+
+#创建模型实例
+model = MyNet2()
+print(model)
+```
+
+上述代码输出为：
+
+```python
+MyNet2(
+  (fc1): Linear(in_features=784, out_features=256, bias=True)
+  (fc2): Linear(in_features=256, out_features=128, bias=True)
+  (fc3): Linear(in_features=128, out_features=10, bias=True)
+  (relu): ReLU()
+  (softmax): Softmax(dim=1)
+)
+```
+
+
+
+对于已有模型的调试以及二次开发时通常需要对模型的中间输出进行提取，pytorch也提供了对每层进行命名的功能，**在继承 `torch.Module` 定义的网络中，每层的变量名就是该层的名字**
+
+### 5.2 使用 Sequential
+
+`nn.Sequential` 是对 `nn.Module` 的封装，它提供了一种一种简单而强大的方式来定义神经网络，特别适用于**层按顺序堆叠**的网络结构。
+
+`Sequential` 容器会按照添加的顺序依次执行其中的模块，前一层的输出自动作为后一层的输入。
+
+简单示例如下：
+
+```python
+# 定义一个简单的全连接网络
+model = nn.Sequential(
+    nn.Linear(784, 128),    # 输入784维，输出128维
+    nn.ReLU(),              # ReLU激活函数
+    nn.Linear(128, 64),     # 输入128维，输出64维
+    nn.ReLU(),              # ReLU激活函数
+    nn.Linear(64, 10)       # 输出10类（如MNIST分类）
+)
+print(model)
+```
+
+上述测试代码的输出为：
+
+```
+Sequential(
+  (0): Linear(in_features=784, out_features=128, bias=True)
+  (1): ReLU()
+  (2): Linear(in_features=128, out_features=64, bias=True) 
+  (3): ReLU()
+  (4): Linear(in_features=64, out_features=10, bias=True)  
+)
+```
+
+
+
+同样的，对于使用 Sequential 定义的网络，也可以方便的定义每层的名字，对于复杂的命名需求，也可以用 OrderedDict 来实现
+
+```python
+from collections import OrderedDict
+
+model = nn.Sequential(OrderedDict([
+    ('fc_layer_1', nn.Linear(784, 128)),
+    ('relu_layer_1', nn.ReLU()),
+    ('fc_layer_2', nn.Linear(128, 64)),
+    ('relu_layer_2', nn.ReLU()),
+    ('output', nn.Linear(64, 10))
+]))
+print(model)
+```
+
+上述测试代码的输出为：
+
+```
+Sequential(
+  (fc_layer_1): Linear(in_features=784, out_features=128, bias=True)
+  (relu_layer_1): ReLU()
+  (fc_layer_2): Linear(in_features=128, out_features=64, bias=True)
+  (relu_layer_2): ReLU()
+  (output): Linear(in_features=64, out_features=10, bias=True)
+)
+```
+
+
+
+## 6 训练
+
+对于人工神经网络的训练，可以概括为以下几步
+
+1. **加载数据**（数据预处理、划分训练/验证集）
+2. **定义网络结构**
+3. **定义损失函数和优化器**
+4. **训练循环**（重复以下步骤直到达到预定epoch）：
+   - 4.1 **获取批次数据**（从数据加载器中取出一个batch）
+   - 4.2 **前馈计算**（输入数据通过网络，得到预测输出）
+   - 4.3 **计算损失**（比较预测值与真实值）
+   - 4.4 **梯度清零**（将优化器的梯度缓冲区清零）
+   - 4.5 **反向传播**（计算损失对各参数的梯度）
+   - 4.6 **参数更新**（优化器根据梯度更新网络权重）
+
+测试代码：
+
+```python
+# mnist_simple_nn.py
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
+
+# ----------------------------
+# 1. 加载数据（含预处理和划分）
+# ----------------------------
+def load_data(batch_size=64):
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))  # MNIST 均值和标准差
+    ])
+    
+    # 训练集
+    train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    
+    # 验证集（从训练集中划分，或使用原始测试集作为验证）
+    val_dataset = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    
+    return train_loader, val_loader
+
+# ----------------------------
+# 2. 定义网络结构
+# ----------------------------
+class SimpleNN(nn.Module):
+    def __init__(self):
+        super(SimpleNN, self).__init__()
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(28 * 28, 128)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(128, 10)
+    
+    def forward(self, x):
+        x = self.flatten(x)
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+# ----------------------------
+# 3. 定义损失函数和优化器
+# ----------------------------
+def get_criterion_and_optimizer(model, lr=0.01):
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=lr)
+    return criterion, optimizer
+
+# ----------------------------
+# 4. 训练循环
+# ----------------------------
+def train_one_epoch(model, train_loader, criterion, optimizer, device):
+    model.train()
+    total_loss = 0.0
+    correct = 0
+    total = 0
+    
+    for data, target in train_loader:
+        data, target = data.to(device), target.to(device)
+        
+        # 4.1 获取批次数据（已由 DataLoader 提供）
+        # 4.2 前馈计算
+        output = model(data)
+        # 4.3 计算损失
+        loss = criterion(output, target)
+        # 4.4 梯度清零
+        optimizer.zero_grad()
+        # 4.5 反向传播
+        loss.backward()
+        # 4.6 参数更新
+        optimizer.step()
+        
+        total_loss += loss.item()
+        pred = output.argmax(dim=1, keepdim=False)
+        correct += pred.eq(target).sum().item()
+        total += target.size(0)
+    
+    avg_loss = total_loss / len(train_loader)
+    accuracy = 100. * correct / total
+    return avg_loss, accuracy
+
+# ----------------------------
+# 验证函数（用于评估模型）
+# ----------------------------
+def validate(model, val_loader, criterion, device):
+    model.eval()
+    total_loss = 0
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        for data, target in val_loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            loss = criterion(output, target)
+            total_loss += loss.item()
+            
+            pred = output.argmax(dim=1, keepdim=False)
+            correct += pred.eq(target).sum().item()
+            total += target.size(0)
+    
+    avg_loss = total_loss / len(val_loader)
+    accuracy = 100. * correct / total
+    return avg_loss, accuracy
+
+# ----------------------------
+# 主函数
+# ----------------------------
+def main():
+    # 设置设备
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # 超参数
+    batch_size = 64
+    epochs = 5
+    learning_rate = 0.01
+    
+    # 1. 加载数据
+    train_loader, val_loader = load_data(batch_size=batch_size)
+    
+    # 2. 定义网络
+    model = SimpleNN().to(device)
+    
+    # 3. 定义损失函数和优化器
+    criterion, optimizer = get_criterion_and_optimizer(model, lr=learning_rate)
+    
+    # 4. 训练循环
+    for epoch in range(1, epochs + 1):
+        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
+        val_loss, val_acc = validate(model, val_loader, criterion, device)
+        
+        print(f"Epoch {epoch}/{epochs}")
+        print(f"  Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
+        print(f"  Val   Loss: {val_loss:.4f}, Val   Acc: {val_acc:.2f}%")
+        print("-" * 40)
+
+if __name__ == "__main__":
+    main()
+```
+
+
+
+## 7 模型的保存和加载
+
+当保存和加载模型时，需要熟悉三个核心功能：
+
+1. `torch.save`：将序列化对象保存到磁盘。此函数使用Python的`pickle`模块进行序列化。使用此函数可以保存如模型、tensor、字典等各种对象。
+2. `torch.load`：使用pickle的`unpickling`功能将pickle对象文件反序列化到内存。此功能还可以有助于设备加载数据。
+3. `torch.nn.Module.load_state_dict`：使用反序列化函数 state_dict 来加载模型的参数字典。
+
+
+
+### 7.1 状态字典 state_dict
+
+在优化器、学习率调度器中我们使用过 `state_dict` 来保存对象的关键信息，同样的，模型的很多信息也被保存在 `state_dict` 中：
+
+1. **模型参数（Parameters）**
+
+这些是通过 `nn.Parameter` 注册的可学习参数，通常是权重（weights）和偏置（biases）。例如：
+
+- `layer.weight`
+- `layer.bias`
+
+这些参数在优化过程中会被优化器更新。
+
+2. **缓冲区（Buffers）**
+
+缓冲区是模型中**不需要梯度**、但需要随模型一起保存的状态变量。它们通过 `register_buffer()` 方法注册。常见的例子包括：
+
+- Batch Normalization 层中的 `running_mean` 和 `running_var`
+- 某些自定义层中的统计量或固定状态
+
+缓冲区不会被优化器更新，但对模型前向传播有影响，因此必须保存。
+
+
+
+但是需要注意，**模型的 `state_dict` 不包括以下内容**：
+
+- **模型结构（architecture）**：`state_dict` 只包含参数值，不包含网络结构。加载时需要先定义相同的模型结构。
+- **优化器状态**：如动量、Adam 的 `m` 和 `v` 等，这些保存在 `optimizer.state_dict()` 中。
+
+
+
+### 7.2 断点续训
+
+断点续训（Checkpointing/Resume Training）是指在模型训练过程中保存当前状态，当训练意外中断（如服务器宕机、断电、手动停止等）后，能够从保存的检查点继续训练，而不是从头开始。
+
+对于模型本身的断点保存方法已经有成熟的应用了，在下面会介绍。
+
+但是对于数据集相关类型，或者说 **Dataset**, **Sampler** 和 **DataLoader** 这三个类需要保存的信息则没有通用的方法，因为通常情况下数据的提取只和训练的轮次数相关，只需要知道训练到哪个batch就行（通常情况下也不会要求断点能精确到批次内的某个输入），但是某些随机或者带状态的 Sampler 则需要单独处理。
+
+> 对于断点续训，在学术场景下只需要保存特定epoch后的模型即可，因此数据提取相关类型不需要进行断点保存
+
+通常情况下，断点需要保存如下信息：
+
+1. 模型状态
+
+   - `model.state_dict()`
+   - 含义：保存所有可学习参数（权重、偏置等）。
+   - 用途：恢复模型到中断时的参数状态。
+   - 注意：只保存 `state_dict()`，不直接保存整个模型对象以节约存储空间
+
+2. 优化器状态
+
+   - `optimizer.state_dict()`
+   - 含义：保存优化器内部的动量、平方梯度累积等信息。
+   - 用途：继续训练时保持优化过程连续（例如 Adam 的动量不能丢）。
+   - 举例：Adam/SGD 内部都有缓存梯度动量、学习率调度参数等。
+
+3. 学习率调度器状态
+
+   - `scheduler.state_dict()`
+   - 含义：记录当前学习率、衰减阶段等。
+   - 用途：恢复学习率变化进度，防止“断点重启后学习率突变”。
+
+4. 当前训练进度信息
+
+   - ```python
+     {
+         "epoch": current_epoch,
+         "global_step": global_step,  # 选用：如果每 batch 更新时记录
+         "best_val_loss": best_val_loss,  # 选用：如有早停机制
+     }
+     
+     ```
+
+   - 用途：恢复训练循环的位置、进度，否则你重启时不知道从哪个 epoch 继续。
+
+   - epoch影响训练轮次、学习率调度器等
+
+5. 随机数状态：如果模型有依赖随机数的话需要保存，当然这个是可选的，因为随机数来源很多，而且学术上不要求模型训练必须原样复现
+
+   - 用途：**确保数据增强、Dropout、BatchShuffle 等操作一致**。
+   - 如果只追求继续训练（不完全复现），可不保存。
+
+一个完整的模型断点保存示例代码如下：
+
+```python
+def save_checkpoint(model, optimizer, scheduler, epoch, best_val_loss, filepath):
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
+        'best_val_loss': best_val_loss,
+    }
+    torch.save(checkpoint, filepath)
+```
+
+
+
+模型的断点恢复代码为：
+
+```python
+checkpoint = torch.load('checkpoint.pth')
+model.load_state_dict(checkpoint['model_state_dict'])
+optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+epoch = checkpoint['epoch']
+loss = checkpoint['loss']
+```
+
+
+
+### 7.3 模型的保存和读取
+
+对于学术使用，保存模型的 `state_dict` 并开源模型的定义代码就足以满足学术上的复现要求了。
+
+而如果想保存整个模型，则可以用下面的代码
+
+```python
+# 保存整个模型
+torch.save(model, 'model.pth')
+
+# 加载整个模型
+loaded_model = torch.load('model.pth')
+```
+
+但是这样做会导致：
+
+- 文件体积较大
+- 对模型类的定义有依赖
+

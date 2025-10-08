@@ -436,6 +436,32 @@ class torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=None, sampler=N
 
 pytorch 框架并没有对`torch.utils.data.DataLoader` 类提供很多具有不同功能的子类。其核心原因是**鼓励用户通过组合和配置现有参数（如 `sampler`, `collate_fn`, `batch_sampler` 等）来满足各种需求。**
 
+#### 4.1.4.1 epoch 和 batch
+
+这里说明一下pytorch对于训练 epoch 和 batch 的关系。
+
+首先是 epoch，它的含义是模型在训练集上完成一次完整遍历，也就是：
+
+```
+num_batches_per_epoch = len(dataset) // batch_size
+```
+
+模型会迭代 `num_batches_per_epoch` 次，使每个样本都被训练一次。
+
+但是**在pytorch框架中，“遍历 dataloader 一次”通常就算一个 epoch**，但 dataloader 的采样方式可能意味着“并非严格遍历整个数据集”。例如有一个长度为5000的数据集，但是用如下的随机采样方式训练：
+
+```python
+DataLoader(dataset, sampler=WeightedRandomSampler(weights, num_samples=1000))
+```
+
+那么：
+
+- 每个 epoch 只训练了 1000 个样本；
+- 其中有的样本可能重复；
+- 有的样本可能没出现；
+
+所以这个 epoch **不是完整遍历整个数据集**。
+
 
 
 ### 4.1.5 整理函数 collate function
@@ -1098,3 +1124,65 @@ text,label
   - `torchtext.vocab.build_vocab_from_iterator`
   - `torchtext.vocab.Vocab`
   - 还可以用 `torchtext.vocab.GloVe`、`FastText` 等预训练词向量。
+
+
+
+## 4.3 断点续训
+
+深度学习中断点续训时，**Dataset**、**Sampler** 和 **DataLoader** 这三个组件需要保存的信息有所不同。
+
+### 4.3.1 Dataset
+
+`Dataset` **本身通常不需要保存额外状态**。因为：
+
+- 它只是定义了数据的访问逻辑（如从文件或内存中读取样本）；
+- 数据内容通常是静态的，不随训练过程变化。
+
+只有以下情况才需要保存额外状态：
+
+1. **动态数据集**（在线生成样本、数据增强随机性强）；
+2. **可变数据源**（例如，训练期间更新的数据、或curriculum learning等自适应采样策略）。
+
+在这种情况下，通常需要保存：
+
+- 数据文件的加载进度（例如当前读到第几个样本）；
+- 动态生成的随机种子或状态；
+- 数据增强管线的随机状态（如果不是每次都固定种子）。
+
+
+
+### 4.3.2 Sampler
+
+**这是关键需要保存的组件**，特别对于 RandomSampler 和 WeightedRandomSampler。
+
+常见的 `Sampler` 类型有：`RandomSampler`、`SequentialSampler`
+
+不同类型的采样器所需状态不同：
+
+| Sampler类型         | 需要保存的状态                                        |
+| ------------------- | ----------------------------------------------------- |
+| `SequentialSampler` | 当前样本索引位置（当前epoch中已取到第几个）           |
+| `RandomSampler`     | 随机数生成器的状态（`torch.Generator().get_state()`） |
+| 自定义Sampler       | 任意内部计数器、缓冲区等自定义状态                    |
+
+这样恢复后你可以重新创建`Sampler`对象并：
+
+```python
+sampler.generator.set_state(saved_rng_state)
+sampler.start_index = saved_start_index
+```
+
+
+
+### 4.3.3 DataLoader
+
+`DataLoader` 本身通常是“无状态”的，但它**封装了多线程/多进程加载逻辑**，在断点续训时也有细节要处理。
+
+关键点
+
+1. `DataLoader` 不需要序列化（可以重新构造）；
+2. 但如果你希望“从上次打断的 batch 开始继续”，则你需要记录：
+   - 当前 epoch 编号；
+   - 当前 batch 索引（在该 epoch 内的第几个 batch）；
+   - 随机状态（尤其当 `shuffle=True` 时）。
+
